@@ -1,0 +1,4 @@
+comment = 'check btree opclass laws on a sample of values'
+default_version = '0.1'
+module_pathname = '$libdir/opclass_laws'
+relocatable = true

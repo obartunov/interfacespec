@@ -1,0 +1,246 @@
+-- Opclass laws for built-in btree opclasses on edge-value samples.
+CREATE EXTENSION IF NOT EXISTS opclass_laws;
+SELECT law, status, checked, detail FROM opclass_laws_check('int2_ops',
+  '{-32768,-1,0,1,2,32767}'::int2[]);
+                   law                    | status | checked |            detail             
+------------------------------------------+--------+---------+-------------------------------
+ O1 cmp reflexive                         | pass   |       6 | 
+ O2 cmp antisymmetric                     | pass   |      15 | 
+ O3 cmp transitive                        | pass   |     126 | 
+ O4 operators agree with cmp              | pass   |     180 | 
+ O5 sortsupport agrees with cmp           | pass   |      36 | 
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | opclass declined abbreviation
+ O7 equalimage: cmp-equal <=> image-equal | pass   |      15 | 
+ O9 skip support                          | pass   |       8 | 
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('int8_ops',
+  '{-9223372036854775808,-1,0,1,2,9223372036854775807}'::int8[]);
+                   law                    | status | checked |            detail             
+------------------------------------------+--------+---------+-------------------------------
+ O1 cmp reflexive                         | pass   |       6 | 
+ O2 cmp antisymmetric                     | pass   |      15 | 
+ O3 cmp transitive                        | pass   |     126 | 
+ O4 operators agree with cmp              | pass   |     180 | 
+ O5 sortsupport agrees with cmp           | pass   |      36 | 
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | opclass declined abbreviation
+ O7 equalimage: cmp-equal <=> image-equal | pass   |      15 | 
+ O9 skip support                          | pass   |       8 | 
+(8 rows)
+
+-- in_range across int2/int4/int8 offsets; base +/- offset overflows at the edges
+SELECT law, status, checked, detail FROM opclass_laws_check_inrange('int4_ops',
+  '{-2147483648,-5,-1,0,1,5,2147483647}'::int4[], '{0,1,32767}');
+                  law                   | status | checked | detail 
+----------------------------------------+--------+---------+--------
+ O8 in_range monotone (bigint offset)   | pass   |    4116 | 
+ O8 in_range monotone (smallint offset) | pass   |    4116 | 
+ O8 in_range monotone (integer offset)  | pass   |    4116 | 
+(3 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('bool_ops', '{false,true}'::bool[]);
+                   law                    | status | checked |       detail        
+------------------------------------------+--------+---------+---------------------
+ O1 cmp reflexive                         | pass   |       2 | 
+ O2 cmp antisymmetric                     | pass   |       1 | 
+ O3 cmp transitive                        | pass   |       6 | 
+ O4 operators agree with cmp              | pass   |      20 | 
+ O5 sortsupport agrees with cmp           | n/a    |       0 | no sortsupport proc
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | no sortsupport proc
+ O7 equalimage: cmp-equal <=> image-equal | pass   |       1 | 
+ O9 skip support                          | pass   |       4 | 
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('float8_ops',
+  '{-Infinity,-1.5,-0,0,1e-300,1,Infinity,NaN}'::float8[]);
+                   law                    | status | checked |                                     detail                                      
+------------------------------------------+--------+---------+---------------------------------------------------------------------------------
+ O1 cmp reflexive                         | pass   |       8 | 
+ O2 cmp antisymmetric                     | pass   |      28 | 
+ O3 cmp transitive                        | pass   |     296 | 
+ O4 operators agree with cmp              | pass   |     320 | 
+ O5 sortsupport agrees with cmp           | pass   |      64 | 
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | opclass declined abbreviation
+ O7 equalimage: cmp-equal <=> image-equal | n/a    |      28 | no equalimage proc; sample has 1 cmp-equal image-different pairs, e.g. a=-0 b=0
+ O9 skip support                          | n/a    |       0 | no skip support proc
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check_inrange('float8_ops',
+  '{-Infinity,-1.5,-0,0,1,Infinity,NaN}'::float8[], '{0,1,Infinity}');
+                      law                       | status | checked | detail 
+------------------------------------------------+--------+---------+--------
+ O8 in_range monotone (double precision offset) | pass   |    4116 | 
+(1 row)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('numeric_ops',
+  '{-Infinity,-1,0,0.0,1,1.0,1.00,1e10,Infinity,NaN}'::numeric[]);
+                   law                    | status | checked |                                      detail                                      
+------------------------------------------+--------+---------+----------------------------------------------------------------------------------
+ O1 cmp reflexive                         | pass   |      10 | 
+ O2 cmp antisymmetric                     | pass   |      45 | 
+ O3 cmp transitive                        | pass   |     590 | 
+ O4 operators agree with cmp              | pass   |     500 | 
+ O5 sortsupport agrees with cmp           | pass   |     100 | 
+ O6 abbreviated key agrees with cmp       | pass   |     100 | 
+ O7 equalimage: cmp-equal <=> image-equal | n/a    |      45 | no equalimage proc; sample has 4 cmp-equal image-different pairs, e.g. a=0 b=0.0
+ O9 skip support                          | n/a    |       0 | no skip support proc
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check_inrange('numeric_ops',
+  '{-Infinity,-1,0,1,1.00,Infinity,NaN}'::numeric[], '{0,0.5,Infinity}');
+                  law                  | status | checked | detail 
+---------------------------------------+--------+---------+--------
+ O8 in_range monotone (numeric offset) | pass   |    4116 | 
+(1 row)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('date_ops',
+  '{-infinity,4713-01-01 BC,2000-02-28,2000-02-29,2000-03-01,5874897-12-31,infinity}'::date[]);
+                   law                    | status | checked |            detail             
+------------------------------------------+--------+---------+-------------------------------
+ O1 cmp reflexive                         | pass   |       7 | 
+ O2 cmp antisymmetric                     | pass   |      21 | 
+ O3 cmp transitive                        | pass   |     196 | 
+ O4 operators agree with cmp              | pass   |     245 | 
+ O5 sortsupport agrees with cmp           | pass   |      49 | 
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | opclass declined abbreviation
+ O7 equalimage: cmp-equal <=> image-equal | pass   |      21 | 
+ O9 skip support                          | pass   |       9 | 
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check_inrange('date_ops',
+  '{-infinity,2000-02-28,2000-02-29,2000-03-01,2000-03-31,infinity}'::date[],
+  '{0,1 day,1 month,1 year}');
+                  law                   | status | checked | detail 
+----------------------------------------+--------+---------+--------
+ O8 in_range monotone (interval offset) | pass   |    3456 | 
+(1 row)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('timestamptz_ops',
+  '{-infinity,2000-01-01 00:00:00+00,2000-01-01 00:00:00.000001+00,2000-01-31 00:00:00+00,infinity}'::timestamptz[]);
+                   law                    | status | checked |            detail             
+------------------------------------------+--------+---------+-------------------------------
+ O1 cmp reflexive                         | pass   |       5 | 
+ O2 cmp antisymmetric                     | pass   |      10 | 
+ O3 cmp transitive                        | pass   |      75 | 
+ O4 operators agree with cmp              | pass   |     125 | 
+ O5 sortsupport agrees with cmp           | pass   |      25 | 
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | opclass declined abbreviation
+ O7 equalimage: cmp-equal <=> image-equal | pass   |      10 | 
+ O9 skip support                          | pass   |       7 | 
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('interval_ops',
+  '{-infinity,0,1 day,24 hours,30 days,1 month,1 year,12 months,infinity}'::interval[]);
+                   law                    | status | checked |                                            detail                                             
+------------------------------------------+--------+---------+-----------------------------------------------------------------------------------------------
+ O1 cmp reflexive                         | pass   |       9 | 
+ O2 cmp antisymmetric                     | pass   |      36 | 
+ O3 cmp transitive                        | pass   |     432 | 
+ O4 operators agree with cmp              | pass   |     405 | 
+ O5 sortsupport agrees with cmp           | n/a    |       0 | no sortsupport proc
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | no sortsupport proc
+ O7 equalimage: cmp-equal <=> image-equal | n/a    |      36 | no equalimage proc; sample has 2 cmp-equal image-different pairs, e.g. a=@ 1 day b=@ 24 hours
+ O9 skip support                          | n/a    |       0 | no skip support proc
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('uuid_ops',
+  '{00000000-0000-0000-0000-000000000000,00000000-0000-0000-0000-000000000001,ffffffff-ffff-ffff-ffff-ffffffffffff}'::uuid[]);
+                   law                    | status | checked | detail 
+------------------------------------------+--------+---------+--------
+ O1 cmp reflexive                         | pass   |       3 | 
+ O2 cmp antisymmetric                     | pass   |       3 | 
+ O3 cmp transitive                        | pass   |      18 | 
+ O4 operators agree with cmp              | pass   |      45 | 
+ O5 sortsupport agrees with cmp           | pass   |       9 | 
+ O6 abbreviated key agrees with cmp       | pass   |       9 | 
+ O7 equalimage: cmp-equal <=> image-equal | pass   |       3 | 
+ O9 skip support                          | pass   |       5 | 
+(8 rows)
+
+SELECT law, status, checked, detail FROM opclass_laws_check('jsonb_ops',
+  ARRAY['1', '1.0', '"a"', 'null', '[]', '{}', '[1]', '[1.0]', '{"a":1}']::jsonb[]);
+                   law                    | status | checked |                                      detail                                      
+------------------------------------------+--------+---------+----------------------------------------------------------------------------------
+ O1 cmp reflexive                         | pass   |       9 | 
+ O2 cmp antisymmetric                     | pass   |      36 | 
+ O3 cmp transitive                        | pass   |     423 | 
+ O4 operators agree with cmp              | pass   |     405 | 
+ O5 sortsupport agrees with cmp           | n/a    |       0 | no sortsupport proc
+ O6 abbreviated key agrees with cmp       | n/a    |       0 | no sortsupport proc
+ O7 equalimage: cmp-equal <=> image-equal | n/a    |      36 | no equalimage proc; sample has 2 cmp-equal image-different pairs, e.g. a=1 b=1.0
+ O9 skip support                          | n/a    |       0 | no skip support proc
+(8 rows)
+
+-- text under several collations; the sample is the same, the laws are
+-- per (opclass, collation)
+CREATE TEMP TABLE words(w text);
+INSERT INTO words VALUES (''), ('a'), ('A'), ('b'), ('B'), ('ab'), ('Ab'),
+  ('a b'), ('1'), ('10'), ('9'), ('Straße'), ('STRASSE'), ('strasse'),
+  (U&'\00E9'), (U&'e\0301'), ('e'), ('f');
+CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+SELECT 'C' AS coll, law, status, detail FROM opclass_laws_check('text_ops',
+  (SELECT array_agg(w COLLATE "C") FROM words));
+ coll |                   law                    | status |        detail        
+------+------------------------------------------+--------+----------------------
+ C    | O1 cmp reflexive                         | pass   | 
+ C    | O2 cmp antisymmetric                     | pass   | 
+ C    | O3 cmp transitive                        | pass   | 
+ C    | O4 operators agree with cmp              | pass   | 
+ C    | O5 sortsupport agrees with cmp           | pass   | 
+ C    | O6 abbreviated key agrees with cmp       | pass   | 
+ C    | O7 equalimage: cmp-equal <=> image-equal | pass   | 
+ C    | O9 skip support                          | n/a    | no skip support proc
+(8 rows)
+
+SELECT 'und-x-icu' AS coll, law, status, detail FROM opclass_laws_check('text_ops',
+  (SELECT array_agg(w COLLATE "und-x-icu") FROM words));
+   coll    |                   law                    | status |        detail        
+-----------+------------------------------------------+--------+----------------------
+ und-x-icu | O1 cmp reflexive                         | pass   | 
+ und-x-icu | O2 cmp antisymmetric                     | pass   | 
+ und-x-icu | O3 cmp transitive                        | pass   | 
+ und-x-icu | O4 operators agree with cmp              | pass   | 
+ und-x-icu | O5 sortsupport agrees with cmp           | pass   | 
+ und-x-icu | O6 abbreviated key agrees with cmp       | pass   | 
+ und-x-icu | O7 equalimage: cmp-equal <=> image-equal | pass   | 
+ und-x-icu | O9 skip support                          | n/a    | no skip support proc
+(8 rows)
+
+SELECT 'pg_unicode_fast' AS coll, law, status, detail FROM opclass_laws_check('text_ops',
+  (SELECT array_agg(w COLLATE pg_unicode_fast) FROM words));
+      coll       |                   law                    | status |        detail        
+-----------------+------------------------------------------+--------+----------------------
+ pg_unicode_fast | O1 cmp reflexive                         | pass   | 
+ pg_unicode_fast | O2 cmp antisymmetric                     | pass   | 
+ pg_unicode_fast | O3 cmp transitive                        | pass   | 
+ pg_unicode_fast | O4 operators agree with cmp              | pass   | 
+ pg_unicode_fast | O5 sortsupport agrees with cmp           | pass   | 
+ pg_unicode_fast | O6 abbreviated key agrees with cmp       | pass   | 
+ pg_unicode_fast | O7 equalimage: cmp-equal <=> image-equal | pass   | 
+ pg_unicode_fast | O9 skip support                          | n/a    | no skip support proc
+(8 rows)
+
+SELECT 'ci' AS coll, law, status, detail FROM opclass_laws_check('text_ops',
+  (SELECT array_agg(w COLLATE ci) FROM words));
+ coll |                   law                    | status |                                        detail                                        
+------+------------------------------------------+--------+--------------------------------------------------------------------------------------
+ ci   | O1 cmp reflexive                         | pass   | 
+ ci   | O2 cmp antisymmetric                     | pass   | 
+ ci   | O3 cmp transitive                        | pass   | 
+ ci   | O4 operators agree with cmp              | pass   | 
+ ci   | O5 sortsupport agrees with cmp           | pass   | 
+ ci   | O6 abbreviated key agrees with cmp       | pass   | 
+ ci   | O7 equalimage: cmp-equal <=> image-equal | n/a    | equalimage returns false; sample has 5 cmp-equal image-different pairs, e.g. a=a b=A
+ ci   | O9 skip support                          | n/a    | no skip support proc
+(8 rows)
+
+-- a law checked on no pairs is reported as empty, not pass
+SELECT law, status FROM opclass_laws_check('int4_ops', '{42}'::int4[]) WHERE law LIKE 'O2%';
+         law          | status 
+----------------------+--------
+ O2 cmp antisymmetric | empty
+(1 row)
+
+-- type mismatch is refused
+SELECT * FROM opclass_laws_check('int4_ops', '{1,2}'::int8[]);
+ERROR:  sample element type bigint does not match opclass input type integer
