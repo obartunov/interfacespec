@@ -87,6 +87,13 @@ btree.  Общность разобрана в INTERFACE-GENERALITY.md.
 | S13 | parallel: объединение выдач воркеров равно последовательному скану | indexam.sgml:830 | DOC | — | SQL | D |
 | S14 | L&Y: move-right при сплите; обратный скан через удалённые/half-dead страницы (`_bt_lock_and_validate_left`) | README «Lehman & Yao», «Page deletion and backwards scans»; nbtsearch.c:1982 | CODE | — | INT | H (прошлая nbtree-машина) |
 
+S1 и S9 состоят из двух частей.  Внешняя проекция (**S1-ext**, **S9-ext**):
+результат исполнения через индекс равен эталону — видна в SQL.
+Внутренний callback-контракт: при `xs_recheck = false` выдача точная
+(S1); `amgetbitmap` эквивалентен объединению `amgettuple` (S9) — видна
+только на границе callback'ов.  Для AM с recheck это разные утверждения:
+внешняя проекция выполняется и тогда, когда AM полагается на recheck.
+
 ## V. VACUUM и жизнь TID
 
 | ID | Контракт | Источник | Носитель | Собл. | Набл. | Пров. |
