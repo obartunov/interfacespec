@@ -1,0 +1,4 @@
+comment = 'D0 generator: Index AM checks from existing metadata and a seqscan reference'
+default_version = '0.1'
+module_pathname = '$libdir/d0gen'
+relocatable = true
