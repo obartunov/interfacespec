@@ -34,7 +34,7 @@ BEGIN
   FROM pg_rewrite WHERE ev_class = 'd0_probe'::regclass;
   DROP VIEW d0_probe;
   RETURN r;
-EXCEPTION WHEN OTHERS THEN
+EXCEPTION WHEN undefined_function OR ambiguous_function THEN
   RETURN NULL;
 END $$;
 
@@ -84,6 +84,18 @@ BEGIN
                        'par', mode = 'parallel'));
 END $$;
 
+-- Does the plan of q under mode read index idx at all?  Used to keep the
+-- reference path off the index under test.
+CREATE FUNCTION d0_plan_reads(q text, mode text, idx text) RETURNS bool
+LANGUAGE plpgsql AS $$
+DECLARE
+  plan jsonb;
+BEGIN
+  PERFORM d0_set_mode(mode);
+  EXECUTE 'EXPLAIN (FORMAT JSON) ' || q INTO plan;
+  RETURN jsonb_path_exists(plan, '$.** ? (@."Index Name" == $idx)', jsonb_build_object('idx', idx));
+END $$;
+
 -- Result of q (a single column) under mode, as a sorted text multiset.
 CREATE FUNCTION d0_result(q text, mode text) RETURNS text[]
 LANGUAGE plpgsql AS $$
@@ -108,6 +120,11 @@ BEGIN
     detail := format('planner did not use %s path on %s: %s', mode, idx, q);
     RETURN;
   END IF;
+  IF d0_plan_reads(q, 'seq', idx) THEN
+    status := 'empty';
+    detail := format('reference plan reads %s: %s', idx, q);
+    RETURN;
+  END IF;
   ref := d0_result(q, 'seq');
   got := d0_result(q, mode);
   IF cardinality(ref) = 0 AND cardinality(got) = 0 THEN
@@ -123,6 +140,100 @@ BEGIN
       (SELECT array_agg(x) FROM (SELECT unnest(ref) EXCEPT ALL SELECT unnest(got)) m(x)),
       (SELECT array_agg(x) FROM (SELECT unnest(got) EXCEPT ALL SELECT unnest(ref)) e(x)));
   END IF;
+END $$;
+
+-- S3: is tids (the index's output order) monotone in the reference sort?
+CREATE FUNCTION d0_order_ok(tbl regclass, col text, dir text, tids tid[],
+                            OUT status text, OUT detail text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  ok bool;
+  n int;
+BEGIN
+  IF upper(dir) NOT IN ('ASC', 'DESC') THEN
+    RAISE EXCEPTION 'dir must be ASC or DESC';
+  END IF;
+  PERFORM d0_set_mode('seq');
+  EXECUTE format($f$
+    SELECT bool_and(ok), count(*) FROM (
+      SELECT r >= lag(r) OVER (ORDER BY o) OR lag(r) OVER (ORDER BY o) IS NULL AS ok
+      FROM unnest(%L::tid[]) WITH ORDINALITY u(t, o)
+      JOIN (SELECT ctid, dense_rank() OVER (ORDER BY %I %s) r FROM %s) s ON s.ctid = u.t) z$f$,
+    tids, col, dir, tbl) INTO ok, n;
+  status := CASE WHEN n = 0 THEN 'empty' WHEN ok THEN 'pass' ELSE 'FAIL' END;
+  detail := format('%s rows', n);
+END $$;
+
+-- S3 for an existing index idx on tbl(col)
+CREATE FUNCTION d0_check_order(tbl regclass, col text, dir text, idx text,
+                               OUT status text, OUT detail text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  q text := format('SELECT ctid FROM %s ORDER BY %I %s', tbl, col, dir);
+  tids tid[] := '{}';
+  r record;
+BEGIN
+  IF NOT d0_plan_uses(q, 'index', idx) THEN
+    status := 'empty';
+    detail := 'planner did not use the index';
+    RETURN;
+  END IF;
+  PERFORM d0_set_mode('index');
+  -- rows in the order the ordered SELECT delivers them
+  FOR r IN EXECUTE q LOOP
+    tids := tids || r.ctid;
+  END LOOP;
+  SELECT * INTO status, detail FROM d0_order_ok(tbl, col, dir, tids);
+END $$;
+
+-- A6: an unqualified index-only count over idx sees every row, NULLs included
+CREATE FUNCTION d0_check_nulls_indexed(tbl regclass, col text, idx text,
+                                       OUT status text, OUT detail text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  q text := format('SELECT count(*) FROM %s', tbl);
+  ref bigint;
+  got bigint;
+  nulls bigint;
+BEGIN
+  IF NOT d0_plan_uses(q, 'ios', idx) THEN
+    status := 'empty';
+    detail := 'no index-only path for an unqualified scan';
+    RETURN;
+  END IF;
+  IF d0_plan_reads(q, 'seq', idx) THEN
+    status := 'empty';
+    detail := 'reference plan reads the index';
+    RETURN;
+  END IF;
+  ref := (d0_result(q, 'seq'))[1]::bigint;
+  got := (d0_result(q, 'ios'))[1]::bigint;
+  nulls := (d0_result(format('SELECT count(*) FROM %s WHERE %I IS NULL', tbl, col), 'seq'))[1]::bigint;
+  status := CASE WHEN nulls = 0 THEN 'empty' WHEN ref = got THEN 'pass' ELSE 'FAIL' END;
+  detail := format('reference %s rows (%s NULL), index-only %s', ref, nulls, got);
+END $$;
+
+-- A9: with a unique index on tbl(col), inserting an existing key val is
+-- rejected, and after deleting it the key is accepted again
+CREATE FUNCTION d0_check_unique(tbl regclass, col text, val text)
+RETURNS TABLE(check_name text, status text, detail text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  typ regtype := (SELECT atttypid FROM pg_attribute WHERE attrelid = tbl AND attname = col);
+BEGIN
+  BEGIN
+    EXECUTE format('INSERT INTO %s (%I) VALUES (%L::%s)', tbl, col, val, typ);
+    RETURN QUERY SELECT 'duplicate rejected', 'FAIL', format('duplicate %s accepted', val);
+  EXCEPTION WHEN unique_violation THEN
+    RETURN QUERY SELECT 'duplicate rejected', 'pass', NULL::text;
+  END;
+  EXECUTE format('DELETE FROM %s WHERE %I = %L::%s', tbl, col, val, typ);
+  BEGIN
+    EXECUTE format('INSERT INTO %s (%I) VALUES (%L::%s)', tbl, col, val, typ);
+    RETURN QUERY SELECT 'key accepted after delete', 'pass', NULL::text;
+  EXCEPTION WHEN unique_violation THEN
+    RETURN QUERY SELECT 'key accepted after delete', 'FAIL', format('%s rejected after delete', val);
+  END;
 END $$;
 
 /*
@@ -271,23 +382,8 @@ BEGIN
   IF pg_indexam_has_property((SELECT oid FROM pg_am WHERE amname = am), 'can_order') THEN
     FOREACH m IN ARRAY CASE WHEN pg_index_has_property(idx::regclass, 'backward_scan')
                             THEN '{ASC,DESC}'::text[] ELSE '{ASC}'::text[] END LOOP
-      q := format('SELECT ctid FROM %s ORDER BY %s %s', tbl, qcol, m);
-      IF NOT d0_plan_uses(q, 'index', idx) THEN
-        RETURN QUERY SELECT 'S3', format('ORDER BY %s', m), 'empty', 'planner did not use the index';
-        CONTINUE;
-      END IF;
-      PERFORM d0_set_mode('index');
-      EXECUTE format('SELECT array_agg(ctid ORDER BY ord) FROM (SELECT ctid, row_number() OVER () ord FROM (%s) s) t', q) INTO tids;
-      PERFORM d0_set_mode('seq');
-      -- ranks from the reference sort; index order must be monotone in them
-      EXECUTE format($f$
-        SELECT bool_and(ok), count(*) FROM (
-          SELECT r >= lag(r) OVER (ORDER BY o) OR lag(r) OVER (ORDER BY o) IS NULL AS ok
-          FROM unnest(%L::tid[]) WITH ORDINALITY u(t, o)
-          JOIN (SELECT ctid, dense_rank() OVER (ORDER BY %s %s) r FROM %s) s ON s.ctid = u.t) z$f$,
-        tids, qcol, m, tbl) INTO ok, n;
-      RETURN QUERY SELECT 'S3', format('ORDER BY %s', m),
-        CASE WHEN n = 0 THEN 'empty' WHEN ok THEN 'pass' ELSE 'FAIL' END, format('%s rows', n);
+      cmpres := d0_check_order(tbl, col, m, idx);
+      RETURN QUERY SELECT 'S3', format('ORDER BY %s', m), cmpres.status, cmpres.detail;
     END LOOP;
   ELSE
     RETURN QUERY SELECT 'S3', 'ordered scan', 'n/a', 'can_order = false';
@@ -295,17 +391,19 @@ BEGIN
 
   -- A6: amoptionalkey => NULLs are in the index (unqualified index-only count)
   IF d0_flag(am, 'amoptionalkey') THEN
-    q := format('SELECT count(*) FROM %s', tbl);
-    IF d0_plan_uses(q, 'ios', idx) THEN
-      ok := d0_result(q, 'ios') = d0_result(q, 'seq');
-      RETURN QUERY SELECT 'A6', 'unqualified scan sees NULLs', CASE WHEN ok THEN 'pass' ELSE 'FAIL' END,
-        format('%s NULL rows in column', (SELECT d0_result(format('SELECT count(*) FROM %s WHERE %s IS NULL', tbl, qcol), 'seq'))[1]);
-    ELSE
-      RETURN QUERY SELECT 'A6', 'unqualified scan sees NULLs', 'empty', 'no index-only path for an unqualified scan';
-    END IF;
+    cmpres := d0_check_nulls_indexed(tbl, col, idx);
+    RETURN QUERY SELECT 'A6', 'unqualified scan sees NULLs', cmpres.status, cmpres.detail;
   ELSE
     RETURN QUERY SELECT 'A6', 'unqualified scan sees NULLs', 'n/a', 'amoptionalkey = false';
   END IF;
+
+  -- metadata agreement for the key column as well (see A7 for INCLUDE)
+  RETURN QUERY SELECT 'A7', 'returnable property agrees with amcanreturn (key)',
+    CASE WHEN pg_index_column_has_property(idx::regclass, 1, 'returnable')
+              IS NOT DISTINCT FROM d0_can_return(idx::regclass, 1) THEN 'pass' ELSE 'METADATA' END,
+    format('property %s, amcanreturn %s',
+           coalesce(pg_index_column_has_property(idx::regclass, 1, 'returnable')::text, 'NULL'),
+           d0_can_return(idx::regclass, 1));
 
   EXECUTE format('DROP INDEX %I', idx);
 
@@ -369,15 +467,7 @@ BEGIN
   IF d0_flag(am, 'amcanunique') THEN
     EXECUTE format('CREATE TEMP TABLE d0_u AS SELECT DISTINCT %s AS k FROM %s WHERE %s IS NOT NULL', qcol, tbl, qcol);
     EXECUTE format('CREATE UNIQUE INDEX d0_u_idx ON d0_u USING %I (k)', am);
-    BEGIN
-      EXECUTE format('INSERT INTO d0_u VALUES (%L::%s)', consts[1], coltype);
-      RETURN QUERY SELECT 'A9', 'duplicate rejected', 'FAIL', 'duplicate accepted';
-    EXCEPTION WHEN unique_violation THEN
-      RETURN QUERY SELECT 'A9', 'duplicate rejected', 'pass', NULL::text;
-    END;
-    EXECUTE format('DELETE FROM d0_u WHERE k = %L::%s', consts[1], coltype);
-    EXECUTE format('INSERT INTO d0_u VALUES (%L::%s)', consts[1], coltype);
-    RETURN QUERY SELECT 'A9', 'key accepted after delete', 'pass', NULL::text;
+    RETURN QUERY SELECT 'A9', u.check_name, u.status, u.detail FROM d0_check_unique('d0_u', 'k', consts[1]) u;
     DROP TABLE d0_u;
   ELSE
     RETURN QUERY SELECT 'A9', 'unique', 'n/a', 'amcanunique = false';
