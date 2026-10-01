@@ -1,0 +1,132 @@
+# InterfaceSpec v0: the contract language found by D0/D1, written as data.
+#
+# Holds only what an executed experiment needed (INTERFACESPEC-EVIDENCE.md).
+# The D1 part (roles, protocols, bindings, laws) is loaded by
+# interfacespec/load_v0.py into the d1laws tables d1_role and d1_law.
+# The D0 part (capabilities, reference) is read by d0gen from
+# IndexAmRoutine and the catalog at run time; it is listed here, not loaded.
+
+version: v0
+
+# ---- D0: existing metadata + reference result --------------------------------
+interfaces:
+  - name: index_am
+    metadata: IndexAmRoutine, amproperty, pg_amop/pg_amproc
+    reference: seqscan            # the same query without the index
+    capabilities:                 # source: am_flag (IndexAmRoutine field) | callback
+      - {name: amgettuple,      source: callback, enables: [A2, S1-ext, S9-ext]}
+      - {name: amgetbitmap,     source: callback, enables: [A2, S9-ext]}
+      - {name: amcanorder,      source: am_flag,  enables: [A4, S3]}
+      - {name: amtranslatestrategy, source: callback, enables: [A4]}
+      - {name: amcanparallel,   source: am_flag,  enables: [S1-ext]}
+      - {name: amoptionalkey,   source: am_flag,  enables: [A6]}
+      - {name: amcanmulticol,   source: am_flag,  enables: [A6]}
+      - {name: amcaninclude,    source: am_flag,  enables: [A7]}
+      - {name: amcanreturn,     source: callback, enables: [A7]}
+      - {name: amproperty,      source: callback, enables: [A7, A10, S3]}
+      - {name: amcanunique,     source: am_flag,  enables: [A9]}
+
+# ---- D1: semantic law + role binding + call protocol + value source ----------
+roles:                            # name: shape
+  comparator:             cmp         # (a, b) -> int, sign
+  alternate_comparator:   cmp
+  equality:               rel         # (a, b) -> bool
+  ordering_operator:      rel         # selector: lt | le | eq | ge | gt
+  reference_predicate:    rel
+  approximate_comparator: approx      # -> (answer, unknown)
+  consistent:             approx
+  tri_consistent:         approx
+  image_equivalence:      guard       # () -> bool, the opclass claims the law
+  range_predicate:        range       # (val, base, offset, sub, less) -> bool
+  successor:              succ        # a -> next / previous, domain bounds
+  hash:                   value       # a -> int4
+  extended_hash:          value       # (a, seed) -> int8
+  entry_transform:        transform   # a -> index entry
+  query_context:          arity       # q -> {nkeys, keys, extra_data, null_categories}; law uses nkeys
+  search_strategy:        strategy    # strategy numbers only, no meaning
+
+protocols:
+  plain:            {input: "SQL arguments", output: "SQL result"}
+  sortsupport:      {input: "(a, b)", output: "int", opaque: [SortSupport]}
+  abbrev:           {input: "(a, b)", output: "(answer, unknown)", opaque: [SortSupport, abbreviated keys]}
+  skipsupport:      {input: "a", output: "successor | bound", opaque: [SkipSupport]}
+  entry_consistent: {input: "(entry, q, strategy, subtype)", output: "(bool, recheck)", opaque: [GISTENTRY on a leaf page]}
+  key_vector:       {input: "(q, strategy)", output: "nkeys", opaque: [keys, extra_data, null_categories]}
+  key_vector_tri:   {input: "(check {F,T,M}^nkeys, q, strategy)", output: "(answer, unknown)", opaque: [keys, extra_data, null_categories]}
+  key_vector_bool:  {input: "(check {F,T}^nkeys, q, strategy)", output: "(bool, recheck)", opaque: [keys, extra_data, null_categories]}
+
+value_sources:
+  sample:      values given to the check (opclass input type, or the query type)
+  cast:        sample values converted by pg_cast to a role operand type
+  generated:   values produced by a role of the opclass itself, or law constants
+  completions: every F/T/M vector of nkeys keys (nkeys <= 4) and every completion of it
+
+law_kinds:                        # kind: relations it admits
+  K1: [reflexive, antisymmetric, symmetric, transitive]
+  K2: [sign_matches_relation, same_sign, low32_equal]
+  K3: [agrees_when_trusted]       # trusted => answer IS NOT DISTINCT FROM reference
+  K4: [image_equal, equal]        # premise => consequence
+  K5: [monotone]
+  K6: [nearest_successor]
+
+# binding: scope am | opfamily; source support_proc (number) | strategy
+# (number) | operator (every search operator); selector; protocol;
+# righttype same | any
+opclass_interfaces:
+  - am: btree
+    bindings:
+      - {scope: am, role: comparator,             source: support_proc, number: 1, protocol: plain}
+      - {scope: am, role: alternate_comparator,   source: support_proc, number: 2, protocol: sortsupport}
+      - {scope: am, role: approximate_comparator, source: support_proc, number: 2, protocol: abbrev}
+      - {scope: am, role: range_predicate,        source: support_proc, number: 3, protocol: plain, righttype: any}
+      - {scope: am, role: image_equivalence,      source: support_proc, number: 4, protocol: plain}
+      - {scope: am, role: successor,              source: support_proc, number: 6, protocol: skipsupport}
+      - {scope: am, role: ordering_operator, source: strategy, number: 1, selector: lt, protocol: plain}
+      - {scope: am, role: ordering_operator, source: strategy, number: 2, selector: le, protocol: plain}
+      - {scope: am, role: ordering_operator, source: strategy, number: 3, selector: eq, protocol: plain}
+      - {scope: am, role: ordering_operator, source: strategy, number: 4, selector: ge, protocol: plain}
+      - {scope: am, role: ordering_operator, source: strategy, number: 5, selector: gt, protocol: plain}
+    laws:
+      - {id: O1, kind: K1, roles: {role: comparator}, relation: reflexive, value_source: [sample]}
+      - {id: O2, kind: K1, roles: {role: comparator}, relation: antisymmetric, value_source: [sample]}
+      - {id: O3, kind: K1, roles: {role: comparator}, relation: transitive, value_source: [sample]}
+      - {id: O4, kind: K2, roles: {a: comparator, b: ordering_operator}, relation: sign_matches_relation, value_source: [sample]}
+      - {id: O5, kind: K2, roles: {a: comparator, b: alternate_comparator}, relation: same_sign, value_source: [sample]}
+      - {id: O6, kind: K3, roles: {approx: approximate_comparator}, reference: comparator,
+         trusted: nonzero_answer, relation: agrees_when_trusted, value_source: [sample]}
+      - {id: O7, kind: K4, roles: {premise: comparator}, guard: image_equivalence,
+         relation: image_equal, iff: true, value_source: [sample]}
+      - {id: O8, kind: K5, roles: {role: range_predicate, order: comparator}, relation: monotone, value_source: [sample, cast]}
+      - {id: O9, kind: K6, roles: {role: successor, order: comparator}, relation: nearest_successor, value_source: [sample, generated]}
+
+  - am: hash
+    bindings:
+      - {scope: am, role: equality,      source: strategy,     number: 1, protocol: plain}
+      - {scope: am, role: hash,          source: support_proc, number: 1, protocol: plain}
+      - {scope: am, role: extended_hash, source: support_proc, number: 2, protocol: plain}
+    laws:
+      - {id: H1, kind: K1, roles: {role: equality}, relation: reflexive, value_source: [sample]}
+      - {id: H2, kind: K1, roles: {role: equality}, relation: symmetric, value_source: [sample]}
+      - {id: H3, kind: K1, roles: {role: equality}, relation: transitive, value_source: [sample]}
+      - {id: H4, kind: K4, roles: {premise: equality, consequence: hash}, relation: equal, value_source: [sample]}
+      - {id: H5, kind: K4, roles: {premise: equality, consequence: extended_hash}, relation: equal, seed: 42, value_source: [sample, generated]}
+      - {id: H6, kind: K2, roles: {a: hash, b: extended_hash}, relation: low32_equal, seed: 0, value_source: [sample, generated]}
+
+  - am: gist
+    bindings:                     # strategy meaning is per opclass
+      - {scope: opfamily, opfamily: poly_ops, role: consistent,          source: support_proc, number: 1, protocol: entry_consistent}
+      - {scope: opfamily, opfamily: poly_ops, role: entry_transform,     source: support_proc, number: 3, protocol: plain}
+      - {scope: opfamily, opfamily: poly_ops, role: reference_predicate, source: operator, protocol: plain}
+    laws:
+      - {id: G1, opfamily: poly_ops, kind: K3, roles: {approx: consistent, aux: entry_transform},
+         reference: reference_predicate, trusted: false_or_exact, relation: agrees_when_trusted, value_source: [sample]}
+
+  - am: gin
+    bindings:
+      - {scope: am, role: query_context,   source: support_proc, number: 3, protocol: key_vector}
+      - {scope: am, role: consistent,      source: support_proc, number: 4, protocol: key_vector_bool}
+      - {scope: am, role: tri_consistent,  source: support_proc, number: 6, protocol: key_vector_tri}
+      - {scope: am, role: search_strategy, source: operator, protocol: plain, righttype: any}
+    laws:
+      - {id: N1, kind: K3, roles: {approx: tri_consistent, aux: query_context, arity: query_context, strategies: search_strategy},
+         reference: consistent, trusted: false_or_exact, relation: agrees_when_trusted, value_source: [sample, completions]}
