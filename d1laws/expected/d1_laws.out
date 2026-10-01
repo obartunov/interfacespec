@@ -1,0 +1,400 @@
+-- D1: one law engine + role tables, three index AMs.
+CREATE EXTENSION d1laws;
+\ir role_tables.sql
+-- Role tables and law instances: the only place that knows which support
+-- function number or strategy number plays which role.  Data for the D1
+-- engine; not part of it.
+-- btree: fixed numbers, so the table is per AM (family NULL)
+INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype) VALUES
+  ('btree', NULL, 'comparator',             'proc', 1, 'plain',       NULL, 'same'),
+  ('btree', NULL, 'alternate_comparator',   'proc', 2, 'sortsupport', NULL, 'same'),
+  ('btree', NULL, 'approximate_comparator', 'proc', 2, 'abbrev',      NULL, 'same'),
+  ('btree', NULL, 'range_predicate',        'proc', 3, 'plain',       NULL, 'any'),
+  ('btree', NULL, 'image_equivalence',      'proc', 4, 'plain',       NULL, 'same'),
+  ('btree', NULL, 'successor',              'proc', 6, 'skipsupport', NULL, 'same'),
+  ('btree', NULL, 'ordering_operator',      'op',   1, 'plain', 'lt', 'same'),
+  ('btree', NULL, 'ordering_operator',      'op',   2, 'plain', 'le', 'same'),
+  ('btree', NULL, 'ordering_operator',      'op',   3, 'plain', 'eq', 'same'),
+  ('btree', NULL, 'ordering_operator',      'op',   4, 'plain', 'ge', 'same'),
+  ('btree', NULL, 'ordering_operator',      'op',   5, 'plain', 'gt', 'same');
+INSERT INTO d1_law (am, family, law, kind, params) VALUES
+  ('btree', NULL, 'O1', 'K1', '{"role": "comparator", "property": "reflexive"}'),
+  ('btree', NULL, 'O2', 'K1', '{"role": "comparator", "property": "antisymmetric"}'),
+  ('btree', NULL, 'O3', 'K1', '{"role": "comparator", "property": "transitive"}'),
+  ('btree', NULL, 'O4', 'K2', '{"a": "comparator", "b": "ordering_operator", "relation": "sign_matches_relation"}'),
+  ('btree', NULL, 'O5', 'K2', '{"a": "comparator", "b": "alternate_comparator", "relation": "same_sign"}'),
+  ('btree', NULL, 'O6', 'K3', '{"approx": "approximate_comparator", "reference": "comparator", "trusted": "nonzero_answer"}'),
+  ('btree', NULL, 'O7', 'K4', '{"premise": "comparator", "consequence": "image", "guard": "image_equivalence", "iff": true}'),
+  ('btree', NULL, 'O8', 'K5', '{"role": "range_predicate", "order": "comparator"}'),
+  ('btree', NULL, 'O9', 'K6', '{"role": "successor", "order": "comparator"}');
+-- hash: fixed numbers, per AM
+INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype) VALUES
+  ('hash', NULL, 'equality',      'op',   1, 'plain', NULL, 'same'),
+  ('hash', NULL, 'hash',          'proc', 1, 'plain', NULL, 'same'),
+  ('hash', NULL, 'extended_hash', 'proc', 2, 'plain', NULL, 'same');
+INSERT INTO d1_law (am, family, law, kind, params) VALUES
+  ('hash', NULL, 'H1', 'K1', '{"role": "equality", "property": "reflexive"}'),
+  ('hash', NULL, 'H2', 'K1', '{"role": "equality", "property": "symmetric"}'),
+  ('hash', NULL, 'H3', 'K1', '{"role": "equality", "property": "transitive"}'),
+  ('hash', NULL, 'H4', 'K4', '{"premise": "equality", "consequence": "hash"}'),
+  ('hash', NULL, 'H5', 'K4', '{"premise": "equality", "consequence": "extended_hash", "seed": 42}'),
+  ('hash', NULL, 'H6', 'K2', '{"a": "hash", "b": "extended_hash", "relation": "low32_equal", "seed": 0}');
+-- GiST: strategy meaning is per opclass, so the table is per family.
+-- poly_ops: leaf entries are bounding boxes (compress), consistent is
+-- evaluated on boxes and always asks for recheck (gistproc.c, gist_poly_consistent).
+INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype) VALUES
+  ('gist', 'poly_ops', 'consistent',          'proc', 1,    'entry_consistent', NULL, 'same'),
+  ('gist', 'poly_ops', 'entry_transform',     'proc', 3,    'plain',            NULL, 'same'),
+  ('gist', 'poly_ops', 'reference_predicate', 'op',   NULL, 'plain',            NULL, 'same');
+INSERT INTO d1_law (am, family, law, kind, params) VALUES
+  ('gist', 'poly_ops', 'G1', 'K3', '{"approx": "consistent", "aux": "entry_transform", "reference": "reference_predicate", "trusted": "false_or_exact"}');
+CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+CREATE TABLE samp AS SELECT
+  '{-2147483648,-5,-1,0,1,2,3,100,1000,2147483647}'::int4[] AS i4,
+  '{a,A,b,B,Straße,STRASSE,strasse,e,"",1}'::text[] AS txt,
+  '{-1,0,0.0,1,1.0,1.00,2.5,NaN,Infinity,-Infinity}'::numeric[] AS num,
+  '{-infinity,2000-02-28,2000-02-29,2000-03-01,2000-03-31,infinity}'::date[] AS dt,
+  ARRAY['((0,0),(4,0),(0,4))', '((4,4),(1,4),(4,1))', '((10,10),(12,10),(10,12))',
+        '((0,0),(1,0),(0,1))', '((2,2),(3,2),(3,3),(2,3))', '((-3,-3),(-1,-3),(-3,-1))']::polygon[] AS poly;
+-- built-in opclasses: roles resolved, values, status
+SELECT 'btree int4' c, law, kind, status, checked, roles, detail FROM samp, d1_check('int4_ops', 'btree', i4);
+     c      | law | kind | status | checked |                                                                                            roles                                                                                             |                detail                 
+------------+-----+------+--------+---------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------
+ btree int4 | O1  | K1   | pass   |      10 | comparator -> btint4cmp                                                                                                                                                                      | 
+ btree int4 | O2  | K1   | pass   |      45 | comparator -> btint4cmp                                                                                                                                                                      | 
+ btree int4 | O3  | K1   | pass   |    1000 | comparator -> btint4cmp                                                                                                                                                                      | 
+ btree int4 | O4  | K2   | pass   |     500 | comparator -> btint4cmp; ordering_operator(lt) -> int4lt; ordering_operator(le) -> int4le; ordering_operator(eq) -> int4eq; ordering_operator(ge) -> int4ge; ordering_operator(gt) -> int4gt | 
+ btree int4 | O5  | K2   | pass   |     100 | comparator -> btint4cmp; alternate_comparator -> btint4sortsupport                                                                                                                           | 
+ btree int4 | O6  | K3   | n/a    |       0 | approximate_comparator -> btint4sortsupport [abbrev]                                                                                                                                         | approximation declined by the opclass
+ btree int4 | O7  | K4   | pass   |      45 | comparator -> btint4cmp; image_equivalence -> btequalimage                                                                                                                                   | 
+ btree int4 | O8  | K5   | pass   |    6600 | range_predicate -> pg_catalog.in_range (offset bigint); comparator -> btint4cmp [val]                                                                                                        | 
+ btree int4 | O8  | K5   | pass   |    6600 | range_predicate -> pg_catalog.in_range (offset bigint); comparator -> btint4cmp [base]                                                                                                       | 
+ btree int4 | O8  | K5   | pass   |    6600 | range_predicate -> pg_catalog.in_range (offset smallint); comparator -> btint4cmp [val]                                                                                                      | 
+ btree int4 | O8  | K5   | pass   |    6600 | range_predicate -> pg_catalog.in_range (offset smallint); comparator -> btint4cmp [base]                                                                                                     | 
+ btree int4 | O8  | K5   | pass   |    6600 | range_predicate -> pg_catalog.in_range (offset integer); comparator -> btint4cmp [val]                                                                                                       | 
+ btree int4 | O8  | K5   | pass   |    6600 | range_predicate -> pg_catalog.in_range (offset integer); comparator -> btint4cmp [base]                                                                                                      | 
+ btree int4 | O9  | K6   | pass   |      12 | successor -> btint4skipsupport [skipsupport]; comparator -> btint4cmp                                                                                                                        | 
+(14 rows)
+
+SELECT 'btree text C' c, law, kind, status, checked, detail FROM samp, d1_check('text_ops', 'btree', (SELECT array_agg(t COLLATE "C") FROM unnest(txt) t));
+      c       | law | kind | status | checked |                      detail                       
+--------------+-----+------+--------+---------+---------------------------------------------------
+ btree text C | O1  | K1   | pass   |      10 | 
+ btree text C | O2  | K1   | pass   |      45 | 
+ btree text C | O3  | K1   | pass   |    1000 | 
+ btree text C | O4  | K2   | pass   |     500 | 
+ btree text C | O5  | K2   | pass   |     100 | 
+ btree text C | O6  | K3   | pass   |     100 | 90 trusted of 100
+ btree text C | O7  | K4   | pass   |      45 | 
+ btree text C | O8  | K5   | n/a    |       0 | role range_predicate not provided by this opclass
+ btree text C | O9  | K6   | n/a    |       0 | role successor not provided by this opclass
+(9 rows)
+
+SELECT 'btree text ci' c, law, kind, status, checked, detail FROM samp, d1_check('text_ops', 'btree', (SELECT array_agg(t COLLATE ci) FROM unnest(txt) t));
+       c       | law | kind | status | checked |                                 detail                                 
+---------------+-----+------+--------+---------+------------------------------------------------------------------------
+ btree text ci | O1  | K1   | pass   |      10 | 
+ btree text ci | O2  | K1   | pass   |      45 | 
+ btree text ci | O3  | K1   | pass   |    1000 | 
+ btree text ci | O4  | K2   | pass   |     500 | 
+ btree text ci | O5  | K2   | pass   |     100 | 
+ btree text ci | O6  | K3   | pass   |     100 | 80 trusted of 100
+ btree text ci | O7  | K4   | n/a    |       0 | guard returns false; sample has 3 premise-true consequence-false pairs
+ btree text ci | O8  | K5   | n/a    |       0 | role range_predicate not provided by this opclass
+ btree text ci | O9  | K6   | n/a    |       0 | role successor not provided by this opclass
+(9 rows)
+
+SELECT 'btree numeric' c, law, kind, status, checked, detail FROM samp, d1_check('numeric_ops', 'btree', num);
+       c       | law | kind | status | checked |                                         detail                                         
+---------------+-----+------+--------+---------+----------------------------------------------------------------------------------------
+ btree numeric | O1  | K1   | pass   |      10 | 
+ btree numeric | O2  | K1   | pass   |      45 | 
+ btree numeric | O3  | K1   | pass   |    1000 | 
+ btree numeric | O4  | K2   | pass   |     500 | 
+ btree numeric | O5  | K2   | pass   |     100 | 
+ btree numeric | O6  | K3   | pass   |     100 | 82 trusted of 100
+ btree numeric | O7  | K4   | n/a    |       0 | guard role image_equivalence absent; sample has 4 premise-true consequence-false pairs
+ btree numeric | O8  | K5   | pass   |    7080 | 
+ btree numeric | O8  | K5   | pass   |    7080 | 
+ btree numeric | O9  | K6   | n/a    |       0 | role successor not provided by this opclass
+(10 rows)
+
+SELECT 'btree date' c, law, kind, status, checked, detail FROM samp, d1_check('date_ops', 'btree', dt);
+     c      | law | kind |  status  | checked |                                                                               detail                                                                               
+------------+-----+------+----------+---------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ btree date | O1  | K1   | pass     |       6 | 
+ btree date | O2  | K1   | pass     |      15 | 
+ btree date | O3  | K1   | pass     |     216 | 
+ btree date | O4  | K2   | pass     |     180 | 
+ btree date | O5  | K2   | pass     |      36 | 
+ btree date | O6  | K3   | n/a      |       0 | approximation declined by the opclass
+ btree date | O7  | K4   | pass     |      15 | 
+ btree date | O8  | K5   | BOUNDARY |       0 | expected input: offsets of type interval; missing: G, a value source for that type; why: values come from the date sample and no cast from date to interval exists
+ btree date | O9  | K6   | pass     |       8 | 
+(9 rows)
+
+SELECT 'hash int4' c, law, kind, status, checked, roles, detail FROM samp, d1_check('int4_ops', 'hash', i4);
+     c     | law | kind | status | checked |                         roles                         | detail 
+-----------+-----+------+--------+---------+-------------------------------------------------------+--------
+ hash int4 | H1  | K1   | pass   |      10 | equality -> int4eq                                    | 
+ hash int4 | H2  | K1   | pass   |      45 | equality -> int4eq                                    | 
+ hash int4 | H3  | K1   | pass   |    1000 | equality -> int4eq                                    | 
+ hash int4 | H4  | K4   | pass   |      45 | equality -> int4eq; hash -> hashint4                  | 
+ hash int4 | H5  | K4   | pass   |      45 | equality -> int4eq; extended_hash -> hashint4extended | 
+ hash int4 | H6  | K2   | pass   |      10 | hash -> hashint4; extended_hash -> hashint4extended   | 
+(6 rows)
+
+SELECT 'hash text ci' c, law, kind, status, checked, detail FROM samp, d1_check('text_ops', 'hash', (SELECT array_agg(t COLLATE ci) FROM unnest(txt) t));
+      c       | law | kind | status | checked | detail 
+--------------+-----+------+--------+---------+--------
+ hash text ci | H1  | K1   | pass   |      10 | 
+ hash text ci | H2  | K1   | pass   |      45 | 
+ hash text ci | H3  | K1   | pass   |    1000 | 
+ hash text ci | H4  | K4   | pass   |      45 | 
+ hash text ci | H5  | K4   | pass   |      45 | 
+ hash text ci | H6  | K2   | pass   |      10 | 
+(6 rows)
+
+SELECT 'gist poly' c, law, kind, status, checked, roles, detail FROM samp, d1_check('poly_ops', 'gist', poly);
+     c     | law | kind | status | checked |                                                                                                                                                                                              roles                                                                                                                                                                                              |       detail       
+-----------+-----+------+--------+---------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------
+ gist poly | G1  | K3   | pass   |     432 | consistent -> gist_poly_consistent [entry_consistent]; entry_transform -> gist_poly_compress; reference_predicate(1); reference_predicate(2); reference_predicate(3); reference_predicate(4); reference_predicate(5); reference_predicate(6); reference_predicate(7); reference_predicate(8); reference_predicate(9); reference_predicate(10); reference_predicate(11); reference_predicate(12) | 220 trusted of 432
+(1 row)
+
+-- Same laws through the btree-specific checker (opclass_laws): the
+-- generic engine + btree role table must agree law by law.
+CREATE EXTENSION opclass_laws;
+CREATE FUNCTION agree(opc text, s anyarray) RETURNS TABLE(law text, d1 text, specific text, same bool)
+LANGUAGE sql AS $$
+  WITH a AS (SELECT d.law, string_agg(d.status, ',' ORDER BY d.status) st FROM d1_check(opc, 'btree', s) d
+             WHERE d.law <> 'O8' GROUP BY 1),
+       b AS (SELECT split_part(o.law, ' ', 1) law, string_agg(o.status, ',' ORDER BY o.status) st
+             FROM opclass_laws_check(opc, s) o GROUP BY 1)
+  SELECT a.law, a.st, b.st, a.st = b.st FROM a FULL JOIN b USING (law) ORDER BY 1
+$$;
+SELECT 'int4' c, a.* FROM samp, agree('int4_ops', i4) a;
+  c   | law |  d1  | specific | same 
+------+-----+------+----------+------
+ int4 | O1  | pass | pass     | t
+ int4 | O2  | pass | pass     | t
+ int4 | O3  | pass | pass     | t
+ int4 | O4  | pass | pass     | t
+ int4 | O5  | pass | pass     | t
+ int4 | O6  | n/a  | n/a      | t
+ int4 | O7  | pass | pass     | t
+ int4 | O9  | pass | pass     | t
+(8 rows)
+
+SELECT 'text C' c, a.* FROM samp, agree('text_ops', (SELECT array_agg(t COLLATE "C") FROM unnest(txt) t)) a;
+   c    | law |  d1  | specific | same 
+--------+-----+------+----------+------
+ text C | O1  | pass | pass     | t
+ text C | O2  | pass | pass     | t
+ text C | O3  | pass | pass     | t
+ text C | O4  | pass | pass     | t
+ text C | O5  | pass | pass     | t
+ text C | O6  | pass | pass     | t
+ text C | O7  | pass | pass     | t
+ text C | O9  | n/a  | n/a      | t
+(8 rows)
+
+SELECT 'text ci' c, a.* FROM samp, agree('text_ops', (SELECT array_agg(t COLLATE ci) FROM unnest(txt) t)) a;
+    c    | law |  d1  | specific | same 
+---------+-----+------+----------+------
+ text ci | O1  | pass | pass     | t
+ text ci | O2  | pass | pass     | t
+ text ci | O3  | pass | pass     | t
+ text ci | O4  | pass | pass     | t
+ text ci | O5  | pass | pass     | t
+ text ci | O6  | pass | pass     | t
+ text ci | O7  | n/a  | n/a      | t
+ text ci | O9  | n/a  | n/a      | t
+(8 rows)
+
+SELECT 'numeric' c, a.* FROM samp, agree('numeric_ops', num) a;
+    c    | law |  d1  | specific | same 
+---------+-----+------+----------+------
+ numeric | O1  | pass | pass     | t
+ numeric | O2  | pass | pass     | t
+ numeric | O3  | pass | pass     | t
+ numeric | O4  | pass | pass     | t
+ numeric | O5  | pass | pass     | t
+ numeric | O6  | pass | pass     | t
+ numeric | O7  | n/a  | n/a      | t
+ numeric | O9  | n/a  | n/a      | t
+(8 rows)
+
+SELECT 'date' c, a.* FROM samp, agree('date_ops', dt) a;
+  c   | law |  d1  | specific | same 
+------+-----+------+----------+------
+ date | O1  | pass | pass     | t
+ date | O2  | pass | pass     | t
+ date | O3  | pass | pass     | t
+ date | O4  | pass | pass     | t
+ date | O5  | pass | pass     | t
+ date | O6  | n/a  | n/a      | t
+ date | O7  | pass | pass     | t
+ date | O9  | pass | pass     | t
+(8 rows)
+
+-- Controls.  One fault changes one relation; the table shows which laws fail.
+-- btree: the opclass_laws control opclass (ctl_opclass.so), one fault per law
+LOAD 'ctl_opclass';
+CREATE FUNCTION ctl_cmp(int4, int4) RETURNS int4 AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_lt(int4, int4) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_le(int4, int4) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_eq(int4, int4) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_ge(int4, int4) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_gt(int4, int4) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_sortsupport(internal) RETURNS void AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_equalimage(oid) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_inrange(int4, int4, int4, bool, bool) RETURNS bool AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION ctl_skipsupport(internal) RETURNS void AS '$libdir/ctl_opclass' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR #<  (LEFTARG = int4, RIGHTARG = int4, FUNCTION = ctl_lt);
+CREATE OPERATOR #<= (LEFTARG = int4, RIGHTARG = int4, FUNCTION = ctl_le);
+CREATE OPERATOR #=  (LEFTARG = int4, RIGHTARG = int4, FUNCTION = ctl_eq);
+CREATE OPERATOR #>= (LEFTARG = int4, RIGHTARG = int4, FUNCTION = ctl_ge);
+CREATE OPERATOR #>  (LEFTARG = int4, RIGHTARG = int4, FUNCTION = ctl_gt);
+CREATE OPERATOR CLASS ctl_int4_ops FOR TYPE int4 USING btree AS
+  OPERATOR 1 #<, OPERATOR 2 #<=, OPERATOR 3 #=, OPERATOR 4 #>=, OPERATOR 5 #>,
+  FUNCTION 1 ctl_cmp(int4, int4), FUNCTION 2 ctl_sortsupport(internal),
+  FUNCTION 3 (int4, int4) ctl_inrange(int4, int4, int4, bool, bool),
+  FUNCTION 4 ctl_equalimage(oid), FUNCTION 6 ctl_skipsupport(internal);
+CREATE TABLE ctl_samp AS SELECT '{-5,-4,-3,-2,-1,0,1,2,3,4,5,100,1000000,1000001,1000002,-1000,2500}'::int4[] AS v;
+-- set the fault, then run: the order is explicit
+CREATE FUNCTION failed_under(guc text, f text, opc text, am text, s anyarray) RETURNS text
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config(guc, f, false);
+  RETURN (SELECT coalesce(string_agg(DISTINCT law, ',' ORDER BY law), '-') FROM d1_check(opc, am, s) WHERE status = 'FAIL');
+END $$;
+CREATE FUNCTION specific_failed_under(f text, opc text, s int4[]) RETURNS text
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config('ctl_opclass.fault', f, false);
+  RETURN (SELECT coalesce(string_agg(DISTINCT split_part(law, ' ', 1), ',' ORDER BY split_part(law, ' ', 1)), '-')
+          FROM (SELECT law, status FROM opclass_laws_check(opc, s)
+                UNION ALL SELECT law, status FROM opclass_laws_check_inrange(opc, s[1:11], '{0,1,3}')) o
+          WHERE status = 'FAIL');
+END $$;
+SELECT f AS fault, failed_under('ctl_opclass.fault', f, 'ctl_int4_ops', 'btree', v) AS d1_failed,
+       specific_failed_under(f, 'ctl_int4_ops', v) AS specific_failed
+FROM ctl_samp, unnest(array['none', 'cmp_irreflexive', 'cmp_asymmetric', 'cmp_nontransitive', 'op_disagree',
+                            'sortsupport', 'abbrev', 'equalimage', 'inrange', 'skip', 'skip_symmetric']) f;
+       fault       | d1_failed | specific_failed 
+-------------------+-----------+-----------------
+ none              | -         | -
+ cmp_irreflexive   | O1,O9     | O1,O9
+ cmp_asymmetric    | O2,O8,O9  | O2,O8,O9
+ cmp_nontransitive | O3,O8,O9  | O3,O8,O9
+ op_disagree       | O4        | O4
+ sortsupport       | O5        | O5
+ abbrev            | O6        | O6
+ equalimage        | O7        | O7
+ inrange           | O8        | O8
+ skip              | O9        | O9
+ skip_symmetric    | O9        | O9
+(11 rows)
+
+RESET ctl_opclass.fault;
+-- hash: equality "equal mod 1000", hash and extended hash of the residue
+LOAD 'd1_ctl';
+CREATE FUNCTION d1ctl_eq(int4, int4) RETURNS bool AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION d1ctl_hash(int4) RETURNS int4 AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION d1ctl_hashext(int4, int8) RETURNS int8 AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR #==# (LEFTARG = int4, RIGHTARG = int4, FUNCTION = d1ctl_eq);
+CREATE OPERATOR CLASS ctl_hash_int4_ops FOR TYPE int4 USING hash AS
+  OPERATOR 1 #==#, FUNCTION 1 d1ctl_hash(int4), FUNCTION 2 d1ctl_hashext(int4, int8);
+SELECT f AS fault, failed_under('d1_ctl.fault', f, 'ctl_hash_int4_ops', 'hash', '{1,1001,2,2002,3,-997,999,5,6,7}'::int4[]) AS d1_failed
+FROM unnest(array['none', 'eq_nontransitive', 'hash_congruence', 'hash_extended']) f;
+      fault       | d1_failed 
+------------------+-----------
+ none             | -
+ eq_nontransitive | H3,H4,H5
+ hash_congruence  | H4,H6
+ hash_extended    | H6
+(4 rows)
+
+RESET d1_ctl.fault;
+-- btree K5: each half of in_range monotonicity has its own control
+CREATE FUNCTION d1ctl_inrange(int4, int4, int4, bool, bool) RETURNS bool AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR CLASS ir_int4_ops FOR TYPE int4 USING btree AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >,
+  FUNCTION 1 btint4cmp(int4, int4), FUNCTION 3 (int4, int4) d1ctl_inrange(int4, int4, int4, bool, bool);
+CREATE FUNCTION k5_under(f text) RETURNS TABLE(half text, status text, checked bigint, detail text)
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config('d1_ctl.fault', f, false);
+  RETURN QUERY SELECT substring(d.roles from '\[(val|base)\]$'), d.status, d.checked, d.detail
+    FROM d1_check('ir_int4_ops', 'btree', '{-1,0,1,2,3,4,5,10}'::int4[]) d WHERE d.law = 'O8';
+END $$;
+SELECT 'none' fault, k.* FROM k5_under('none') k;
+ fault | half | status | checked | detail 
+-------+------+--------+---------+--------
+ none  | val  | pass   |    3456 | 
+ none  | base | pass   |    3456 | 
+(2 rows)
+
+SELECT 'inrange_val' fault, k.* FROM k5_under('inrange_val') k;
+    fault    | half | status | checked |                                    detail                                    
+-------------+------+--------+---------+------------------------------------------------------------------------------
+ inrange_val | val  | FAIL   |    3456 | offset=0 sub=f less=t: val #5 true, val #4 false, base #5 (sample positions)
+ inrange_val | base | pass   |    3456 | 
+(2 rows)
+
+SELECT 'inrange_base' fault, k.* FROM k5_under('inrange_base') k;
+    fault     | half | status | checked |                                    detail                                     
+--------------+------+--------+---------+-------------------------------------------------------------------------------
+ inrange_base | val  | pass   |    3456 | 
+ inrange_base | base | FAIL   |    3456 | offset=0 sub=f less=t: base #1 true, base #5 false, val #1 (sample positions)
+(2 rows)
+
+RESET d1_ctl.fault;
+-- GiST: a polygon family whose consistent wraps gist_poly_consistent.  The
+-- role table is per family, so the family gets its own rows.
+CREATE FUNCTION d1ctl_poly_consistent(internal, polygon, int2, oid, internal) RETURNS bool
+  AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR CLASS ctl_poly_ops FOR TYPE polygon USING gist AS
+  OPERATOR 1 <<, OPERATOR 2 &<, OPERATOR 3 &&, OPERATOR 4 &>, OPERATOR 5 >>, OPERATOR 6 ~=,
+  OPERATOR 7 @>, OPERATOR 8 <@, OPERATOR 9 &<|, OPERATOR 10 <<|, OPERATOR 11 |>>, OPERATOR 12 |&>,
+  FUNCTION 1 d1ctl_poly_consistent(internal, polygon, int2, oid, internal),
+  FUNCTION 3 gist_poly_compress(internal);
+INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype)
+  SELECT am, 'ctl_poly_ops', role, source, number, protocol, attr, righttype FROM d1_role WHERE family = 'poly_ops';
+INSERT INTO d1_law SELECT am, 'ctl_poly_ops', law, kind, params FROM d1_law WHERE family = 'poly_ops';
+CREATE FUNCTION check_under(f text, opc text, am text, s anyarray) RETURNS TABLE(law text, status text, detail text)
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config('d1_ctl.fault', f, false);
+  RETURN QUERY SELECT d.law, d.status, d.detail FROM d1_check(opc, am, s) d;
+END $$;
+SELECT 'none' fault, k.* FROM samp, check_under('none', 'ctl_poly_ops', 'gist', poly) k;
+ fault | law | status |       detail       
+-------+-----+--------+--------------------
+ none  | G1  | pass   | 220 trusted of 432
+(1 row)
+
+SELECT 'consistent_exact' fault, k.* FROM samp, check_under('consistent_exact', 'ctl_poly_ops', 'gist', poly) k;
+      fault       | law | status |                                       detail                                        
+------------------+-----+--------+-------------------------------------------------------------------------------------
+ consistent_exact | G1  | FAIL   | strategy 1: x=((0,0),(4,0),(0,4)) q=((4,4),(1,4),(4,1)) answer=1 flag=f reference=0
+(1 row)
+
+RESET d1_ctl.fault;
+-- A role this opclass does not provide: n/a, not FAIL
+CREATE OPERATOR CLASS bare_int4_ops FOR TYPE int4 USING btree AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4);
+SELECT law, status, detail FROM samp, d1_check('bare_int4_ops', 'btree', i4);
+ law | status |                                         detail                                         
+-----+--------+----------------------------------------------------------------------------------------
+ O1  | pass   | 
+ O2  | pass   | 
+ O3  | pass   | 
+ O4  | pass   | 
+ O5  | n/a    | role alternate_comparator not provided by this opclass
+ O6  | n/a    | role approximate_comparator not provided by this opclass
+ O7  | n/a    | guard role image_equivalence absent; sample has 0 premise-true consequence-false pairs
+ O8  | n/a    | role range_predicate not provided by this opclass
+ O9  | n/a    | role successor not provided by this opclass
+(9 rows)
+

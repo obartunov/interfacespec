@@ -1,0 +1,4 @@
+comment = 'D1: generic opclass law engine driven by a role table'
+default_version = '0.1'
+module_pathname = '$libdir/d1laws'
+relocatable = true
