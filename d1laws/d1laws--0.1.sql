@@ -23,6 +23,12 @@ CREATE FUNCTION d1_abbrev_cmp(proc oid, aux oid, x anyelement, q "any", strategy
   RETURNS d1_approx AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
 CREATE FUNCTION d1_entry_consistent(proc oid, aux oid, x anyelement, q "any", strategy int, subtype oid)
   RETURNS d1_approx AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
+CREATE FUNCTION d1_kv_nkeys(extract_fn oid, q "any", strategy int) RETURNS int
+  AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
+CREATE FUNCTION d1_kv_tri(proc oid, aux oid, x anyelement, q "any", strategy int, subtype oid)
+  RETURNS d1_approx AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
+CREATE FUNCTION d1_kv_consistent(proc oid, aux oid, x anyelement, q "any", strategy int, subtype oid)
+  RETURNS d1_approx AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
 CREATE FUNCTION d1_skip_bound(proc oid, sample anyelement, which text) RETURNS anyelement
   AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
 CREATE FUNCTION d1_skip_step(proc oid, a anyelement, dir text) RETURNS anyelement
@@ -36,7 +42,8 @@ INSERT INTO d1_role_vocab VALUES
   ('approximate_comparator', 'approx'), ('consistent', 'approx'),
   ('image_equivalence', 'guard'), ('range_predicate', 'range'),
   ('successor', 'succ'), ('hash', 'value'), ('extended_hash', 'value'),
-  ('entry_transform', 'transform');
+  ('entry_transform', 'transform'),
+  ('query_context', 'arity'), ('tri_consistent', 'approx'), ('search_strategy', 'strategy');
 
 -- Protocol x operation -> SQL-callable function implementing the call.
 CREATE TABLE d1_protocol (protocol text, operation text, func text,
@@ -48,7 +55,25 @@ INSERT INTO d1_protocol VALUES
   ('sortsupport', 'cmp', 'd1_sortsupport_cmp'),
   ('abbrev', 'approx', 'd1_abbrev_cmp'),
   ('entry_consistent', 'approx', 'd1_entry_consistent'),
-  ('skipsupport', 'bound', 'd1_skip_bound'), ('skipsupport', 'step', 'd1_skip_step');
+  ('skipsupport', 'bound', 'd1_skip_bound'), ('skipsupport', 'step', 'd1_skip_step'),
+  ('key_vector', 'arity', 'd1_kv_nkeys'),
+  ('key_vector_tri', 'approx', 'd1_kv_tri'), ('key_vector_bool', 'approx', 'd1_kv_consistent');
+
+-- Value source: every F/T/M vector of length n (n <= 4), and its completions.
+CREATE FUNCTION d1_ternary_states(n int) RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $$
+  WITH RECURSIVE s(p) AS (SELECT ''::text
+                          UNION ALL SELECT s.p || t FROM s, unnest('{F,T,M}'::text[]) t WHERE length(s.p) < n)
+  SELECT p FROM s WHERE length(p) = n AND n <= 4
+$$;
+CREATE FUNCTION d1_completions(p text) RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $$
+  WITH RECURSIVE c(done, rest) AS (
+    SELECT ''::text, p
+    UNION ALL
+    SELECT c.done || x, substr(c.rest, 2) FROM c,
+      unnest(CASE WHEN left(c.rest, 1) = 'M' THEN '{F,T}'::text[] ELSE ARRAY[left(c.rest, 1)] END) x
+    WHERE c.rest <> '')
+  SELECT done FROM c WHERE rest = ''
+$$;
 
 -- Role table: filled per AM (family NULL) or per operator family.
 -- source 'proc': support function number; 'op': strategy number, or NULL
@@ -78,7 +103,7 @@ LANGUAGE sql STABLE AS $$
        AND p.amproclefttype = typ AND p.amprocnum = r.number
        AND (r.righttype = 'any' OR p.amprocrighttype = typ)
   LEFT JOIN pg_amop a ON r.source = 'op' AND a.amopfamily = fam AND a.amoppurpose = 's'
-       AND a.amoplefttype = typ AND a.amoprighttype = typ
+       AND a.amoplefttype = typ AND (r.righttype = 'any' OR a.amoprighttype = typ)
        AND (r.number IS NULL OR a.amopstrategy = r.number)
   LEFT JOIN pg_operator o ON o.oid = a.amopopr
   WHERE r.role = rolename AND (r.family IS NULL OR r.family = f.opfname)
@@ -200,19 +225,26 @@ BEGIN
 END $$;
 
 -- K3: one-sided approximation.  approx(x, q) -> (answer, flag); when the
--- answer is trusted it must equal the reference (sign for cmp, 0/1 for rel).
---   trusted: nonzero_answer | false_or_exact (answer = 0 or flag = false)
+-- answer is trusted it must equal the reference (sign for cmp, 0/1 for rel;
+-- an approx-shaped reference that is itself uncertain confirms nothing).
+--   trusted:    nonzero_answer | false_or_exact (answer = 0 or flag = false)
+--   source:     sample_pairs (x, q from the sample; default) |
+--               ternary_completions (q from the sample; x = every F/T/M
+--               vector of the length the 'arity' role reports for q; the
+--               reference is evaluated on every completion of x)
+--   strategies: role whose rows give strategy numbers, when the reference
+--               role itself carries none
 CREATE FUNCTION d1_k3(fam oid, typ oid, p jsonb) RETURNS d1_out LANGUAGE plpgsql AS $$
 DECLARE
-  ap record; aux record; ref record;
+  ap record; aux record; st record; refr record; ar record;
   refshape text := (SELECT shape FROM d1_role_vocab WHERE role = p->>'reference');
   trusted text := CASE p->>'trusted' WHEN 'nonzero_answer' THEN '(z.a).answer <> 0'
                                      WHEN 'false_or_exact' THEN '((z.a).answer = 0 OR NOT (z.a).flag)' END;
+  src text := coalesce(p->>'source', 'sample_pairs');
   auxfn oid := 0;
-  e record;
-  checked bigint := 0; bad text; ntrusted bigint := 0; n bigint; nt bigint;
+  checked bigint := 0; bad text; ntrusted bigint := 0; n bigint; nt bigint; skipped bigint := 0; sk bigint;
   roles text;
-  refexpr text;
+  from_ text; ax text; rx text; xshow text; refexpr text; apexpr text; arity text;
   declined bool;
 BEGIN
   SELECT * INTO ap FROM d1_resolve(fam, typ, p->>'approx') LIMIT 1;
@@ -223,31 +255,58 @@ BEGIN
     SELECT * INTO aux FROM d1_resolve(fam, typ, p->>'aux') LIMIT 1;
     IF FOUND THEN auxfn := aux.fn; roles := roles || format('; %s -> %s', p->>'aux', aux.fn::regproc); END IF;
   END IF;
-  FOR ref IN SELECT * FROM d1_resolve(fam, typ, p->>'reference') LOOP
-    refexpr := CASE refshape WHEN 'cmp' THEN d1_cmp(ref, 'x.v', 'q.v')
-                             ELSE format('(%s)::int', d1_call(ref.protocol, 'rel', ref.fn, 'x.v, q.v')) END;
-    EXECUTE format('SELECT bool_and(a IS NULL) FROM (SELECT %s a FROM d1_s x, d1_s q LIMIT 1) s',
-                   d1_call(ap.protocol, 'approx', ap.fn, format('%s::oid, x.v, q.v, %s, %s::oid', auxfn, ref.strategy, ref.subtype)))
-      INTO declined;
+  IF p ? 'strategies' THEN
+    IF NOT EXISTS (SELECT 1 FROM d1_resolve(fam, typ, p->>'strategies')) THEN RETURN d1_absent(p->>'strategies'); END IF;
+    SELECT * INTO refr FROM d1_resolve(fam, typ, p->>'reference') LIMIT 1;
+    roles := roles || format('; %s -> %s [%s]', p->>'reference', refr.fn::regproc, refr.protocol);
+  END IF;
+  IF src = 'ternary_completions' THEN
+    SELECT * INTO ar FROM d1_resolve(fam, typ, p->>'arity') LIMIT 1;
+    IF NOT FOUND THEN RETURN d1_absent(p->>'arity'); END IF;
+  END IF;
+
+  FOR st IN SELECT * FROM d1_resolve(fam, typ, coalesce(p->>'strategies', p->>'reference')) LOOP
+    IF NOT p ? 'strategies' THEN refr := st; END IF;
+    IF src = 'ternary_completions' THEN
+      arity := d1_call(ar.protocol, 'arity', ar.fn, format('q.v, %s', st.strategy));
+      from_ := format('d1_s q, LATERAL d1_ternary_states(%s) s(p), LATERAL d1_completions(s.p) c(c)', arity);
+      ax := 's.p'; rx := 'c.c';
+      xshow := $x$format('check=%s completion=%s', s.p, c.c)$x$;
+      EXECUTE format('SELECT count(*) FROM d1_s q WHERE %s > 4', arity) INTO sk;
+      skipped := skipped + sk;
+    ELSE
+      from_ := 'd1_s x, d1_s q';
+      ax := 'x.v'; rx := 'x.v';
+      xshow := $x$format('x=%s', x.v)$x$;
+    END IF;
+    apexpr := d1_call(ap.protocol, 'approx', ap.fn, format('%s::oid, %s, q.v, %s, %s::oid', auxfn, ax, st.strategy, st.subtype));
+    refexpr := CASE refshape
+      WHEN 'cmp' THEN d1_cmp(refr, rx, 'q.v')
+      WHEN 'rel' THEN format('(%s)::int', d1_call(refr.protocol, 'rel', refr.fn, rx || ', q.v'))
+      WHEN 'approx' THEN format('(SELECT CASE WHEN (r).flag THEN NULL ELSE (r).answer END FROM (SELECT %s r) rr)',
+                                d1_call(refr.protocol, 'approx', refr.fn, format('%s::oid, %s, q.v, %s, %s::oid', auxfn, rx, st.strategy, st.subtype)))
+    END;
+    EXECUTE format('SELECT bool_and(a IS NULL) FROM (SELECT %s a FROM %s LIMIT 1) s', apexpr, from_) INTO declined;
     IF declined THEN
       RETURN (roles, 'n/a', 0::bigint, 'approximation declined by the opclass')::d1_out;
     END IF;
     EXECUTE format($q$
       SELECT count(*), count(*) FILTER (WHERE %1$s),
-             (array_agg(format('strategy %4$s: x=%%s q=%%s answer=%%s flag=%%s reference=%%s', x, q, (z.a).answer, (z.a).flag, ref))
-                FILTER (WHERE %1$s AND (z.a).answer <> ref))[1]
-      FROM (SELECT x.v x, q.v q, %2$s a, %3$s ref FROM d1_s x, d1_s q) z$q$,
-      trusted,
-      d1_call(ap.protocol, 'approx', ap.fn, format('%s::oid, x.v, q.v, %s, %s::oid', auxfn, ref.strategy, ref.subtype)),
-      refexpr, ref.strategy)
+             (array_agg(format('strategy %4$s: %%s q=%%s answer=%%s flag=%%s reference=%%s', xs, q, (z.a).answer, (z.a).flag, coalesce(ref::text, 'unknown')))
+                FILTER (WHERE %1$s AND (z.a).answer IS DISTINCT FROM ref))[1]
+      FROM (SELECT %5$s xs, q.v q, %2$s a, %3$s ref FROM %6$s) z$q$,
+      trusted, apexpr, refexpr, st.strategy, xshow, from_)
       INTO n, nt, bad;
     checked := checked + n;
     ntrusted := ntrusted + nt;
     IF bad IS NOT NULL THEN EXIT; END IF;
-    IF refshape = 'rel' THEN roles := roles || format('; %s(%s)', p->>'reference', ref.strategy); END IF;
+    IF refshape = 'rel' OR p ? 'strategies' THEN
+      roles := roles || format('; %s(%s)', coalesce(p->>'strategies', p->>'reference'), st.strategy);
+    END IF;
   END LOOP;
   RETURN (roles, CASE WHEN bad IS NOT NULL THEN 'FAIL' WHEN ntrusted = 0 THEN 'empty' ELSE 'pass' END,
-          checked, coalesce(bad, format('%s trusted of %s', ntrusted, checked)))::d1_out;
+          checked, coalesce(bad, format('%s trusted of %s', ntrusted, checked)
+                                 || CASE WHEN skipped > 0 THEN format('; %s query/strategy pairs with more than 4 keys skipped', skipped) ELSE '' END))::d1_out;
 END $$;
 
 -- K4: congruence.  premise(x, y) => consequence(x, y); optionally iff.
@@ -437,6 +496,7 @@ RETURNS TABLE(law text, kind text, roles text, values_n int, status text, checke
 LANGUAGE plpgsql AS $$
 DECLARE
   fam oid; typ oid; famname text;
+  styp oid := (SELECT typelem FROM pg_type WHERE oid = pg_typeof(sample));
   coll text;
   l record;
   o d1_out;
@@ -446,17 +506,17 @@ BEGIN
   FROM pg_opclass c JOIN pg_am m ON m.oid = c.opcmethod JOIN pg_opfamily f ON f.oid = c.opcfamily
   WHERE c.opcname = opclass COLLATE "C" AND m.amname = am COLLATE "C";
   IF fam IS NULL THEN RAISE EXCEPTION 'no opclass % for %', opclass, am; END IF;
-  IF (SELECT typcollation <> 0 FROM pg_type WHERE oid = typ) THEN
+  IF (SELECT typcollation <> 0 FROM pg_type WHERE oid = styp) THEN
     coll := pg_collation_for(sample);
   END IF;
 
   -- scratch tables are dropped and recreated per call; keep that quiet
   PERFORM set_config('client_min_messages', 'warning', true);
   DROP TABLE IF EXISTS d1_s;
-  EXECUTE format('CREATE TEMP TABLE d1_s (i int, v %s %s)', typ::regtype,
+  EXECUTE format('CREATE TEMP TABLE d1_s (i int, v %s %s)', styp::regtype,
                  CASE WHEN coll IS NOT NULL THEN 'COLLATE ' || coll ELSE '' END);
   EXECUTE format('INSERT INTO d1_s SELECT row_number() OVER (), v FROM unnest($1::%s[]) v WHERE v IS NOT NULL LIMIT %s',
-                 typ::regtype, max_n) USING sample;
+                 styp::regtype, max_n) USING sample;
   SELECT count(*) INTO n FROM d1_s;
 
   FOR l IN SELECT * FROM d1_law d WHERE d.am = d1_check.am COLLATE "C" AND (d.family IS NULL OR d.family = famname) ORDER BY d.law LOOP

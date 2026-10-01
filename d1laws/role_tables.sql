@@ -51,3 +51,15 @@ INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype
 
 INSERT INTO d1_law (am, family, law, kind, params) VALUES
   ('gist', 'poly_ops', 'G1', 'K3', '{"approx": "consistent", "aux": "entry_transform", "reference": "reference_predicate", "trusted": "false_or_exact"}');
+
+-- GIN: support numbers are fixed per AM, and this law needs no strategy
+-- meaning (it enumerates every search strategy), so the table is per AM.
+-- query_context gives the key count; consistent is the reference.
+INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype) VALUES
+  ('gin', NULL, 'query_context',   'proc', 3,    'key_vector',      NULL, 'same'),
+  ('gin', NULL, 'consistent',      'proc', 4,    'key_vector_bool', NULL, 'same'),
+  ('gin', NULL, 'tri_consistent',  'proc', 6,    'key_vector_tri',  NULL, 'same'),
+  ('gin', NULL, 'search_strategy', 'op',   NULL, 'plain',           NULL, 'any');
+
+INSERT INTO d1_law (am, family, law, kind, params) VALUES
+  ('gin', NULL, 'N1', 'K3', '{"approx": "tri_consistent", "aux": "query_context", "reference": "consistent", "trusted": "false_or_exact", "source": "ternary_completions", "arity": "query_context", "strategies": "search_strategy"}');

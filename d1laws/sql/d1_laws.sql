@@ -137,6 +137,32 @@ SELECT 'none' fault, k.* FROM samp, check_under('none', 'ctl_poly_ops', 'gist', 
 SELECT 'consistent_exact' fault, k.* FROM samp, check_under('consistent_exact', 'ctl_poly_ops', 'gist', poly) k;
 RESET d1_ctl.fault;
 
+-- GIN: triConsistent through the same K3.  The sample is queries (tsquery);
+-- each check vector over the query's keys, every completion of it, both strategies.
+CREATE TABLE gin_samp AS SELECT
+  '{a,"a & b","a | b","!a","a & !b","(a | b) & !c","a <-> b","a:A & b","a & !a","a | (b & !c) | d"}'::tsquery[] AS q;
+SELECT 'gin tsvector' c, law, kind, status, checked, roles, detail FROM gin_samp, d1_check('tsvector_ops', 'gin', q);
+
+-- control: triConsistent answers TRUE where the real one says MAYBE
+CREATE FUNCTION d1ctl_tri(internal, int2, tsquery, int4, internal, internal, internal) RETURNS "char"
+  AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR CLASS ctl_tsvector_ops FOR TYPE tsvector USING gin AS
+  OPERATOR 1 @@ (tsvector, tsquery), OPERATOR 2 @@@ (tsvector, tsquery),
+  FUNCTION 1 gin_cmp_tslexeme(text, text),
+  FUNCTION 2 gin_extract_tsvector(tsvector, internal, internal),
+  FUNCTION 3 gin_extract_tsquery(tsquery, internal, int2, internal, internal, internal, internal),
+  FUNCTION 4 gin_tsquery_consistent(internal, int2, tsquery, int4, internal, internal, internal, internal),
+  FUNCTION 6 d1ctl_tri(internal, int2, tsquery, int4, internal, internal, internal),
+  STORAGE text;
+SELECT 'none' fault, k.* FROM gin_samp, check_under('none', 'ctl_tsvector_ops', 'gin', q) k;
+SELECT 'tri_overconfident' fault, k.* FROM gin_samp, check_under('tri_overconfident', 'ctl_tsvector_ops', 'gin', q) k;
+-- only an uncertain reference (consistent: true with recheck) can expose this one
+SELECT 'tri_exact_claim' fault, k.* FROM gin_samp, check_under('tri_exact_claim', 'ctl_tsvector_ops', 'gin', q) k;
+-- answer agrees with the first completion of the input (every M read as F),
+-- not with the others: only a check of every completion exposes it
+SELECT 'tri_first_completion' fault, k.* FROM gin_samp, check_under('tri_first_completion', 'ctl_tsvector_ops', 'gin', q) k;
+RESET d1_ctl.fault;
+
 -- A role this opclass does not provide: n/a, not FAIL
 CREATE OPERATOR CLASS bare_int4_ops FOR TYPE int4 USING btree AS
   OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4);

@@ -48,6 +48,16 @@ INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype
   ('gist', 'poly_ops', 'reference_predicate', 'op',   NULL, 'plain',            NULL, 'same');
 INSERT INTO d1_law (am, family, law, kind, params) VALUES
   ('gist', 'poly_ops', 'G1', 'K3', '{"approx": "consistent", "aux": "entry_transform", "reference": "reference_predicate", "trusted": "false_or_exact"}');
+-- GIN: support numbers are fixed per AM, and this law needs no strategy
+-- meaning (it enumerates every search strategy), so the table is per AM.
+-- query_context gives the key count; consistent is the reference.
+INSERT INTO d1_role (am, family, role, source, number, protocol, attr, righttype) VALUES
+  ('gin', NULL, 'query_context',   'proc', 3,    'key_vector',      NULL, 'same'),
+  ('gin', NULL, 'consistent',      'proc', 4,    'key_vector_bool', NULL, 'same'),
+  ('gin', NULL, 'tri_consistent',  'proc', 6,    'key_vector_tri',  NULL, 'same'),
+  ('gin', NULL, 'search_strategy', 'op',   NULL, 'plain',           NULL, 'any');
+INSERT INTO d1_law (am, family, law, kind, params) VALUES
+  ('gin', NULL, 'N1', 'K3', '{"approx": "tri_consistent", "aux": "query_context", "reference": "consistent", "trusted": "false_or_exact", "source": "ternary_completions", "arity": "query_context", "strategies": "search_strategy"}');
 CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
 CREATE TABLE samp AS SELECT
   '{-2147483648,-5,-1,0,1,2,3,100,1000,2147483647}'::int4[] AS i4,
@@ -378,6 +388,55 @@ SELECT 'consistent_exact' fault, k.* FROM samp, check_under('consistent_exact', 
       fault       | law | status |                                       detail                                        
 ------------------+-----+--------+-------------------------------------------------------------------------------------
  consistent_exact | G1  | FAIL   | strategy 1: x=((0,0),(4,0),(0,4)) q=((4,4),(1,4),(4,1)) answer=1 flag=f reference=0
+(1 row)
+
+RESET d1_ctl.fault;
+-- GIN: triConsistent through the same K3.  The sample is queries (tsquery);
+-- each check vector over the query's keys, every completion of it, both strategies.
+CREATE TABLE gin_samp AS SELECT
+  '{a,"a & b","a | b","!a","a & !b","(a | b) & !c","a <-> b","a:A & b","a & !a","a | (b & !c) | d"}'::tsquery[] AS q;
+SELECT 'gin tsvector' c, law, kind, status, checked, roles, detail FROM gin_samp, d1_check('tsvector_ops', 'gin', q);
+      c       | law | kind | status | checked |                                                                                                          roles                                                                                                           |       detail       
+--------------+-----+------+--------+---------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------
+ gin tsvector | N1  | K3   | pass   |     848 | tri_consistent -> gin_tsquery_triconsistent [key_vector_tri]; query_context -> pg_catalog.gin_extract_tsquery; consistent -> pg_catalog.gin_tsquery_consistent [key_vector_bool]; search_strategy(1); search_strategy(2) | 408 trusted of 848
+(1 row)
+
+-- control: triConsistent answers TRUE where the real one says MAYBE
+CREATE FUNCTION d1ctl_tri(internal, int2, tsquery, int4, internal, internal, internal) RETURNS "char"
+  AS '$libdir/d1_ctl' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR CLASS ctl_tsvector_ops FOR TYPE tsvector USING gin AS
+  OPERATOR 1 @@ (tsvector, tsquery), OPERATOR 2 @@@ (tsvector, tsquery),
+  FUNCTION 1 gin_cmp_tslexeme(text, text),
+  FUNCTION 2 gin_extract_tsvector(tsvector, internal, internal),
+  FUNCTION 3 gin_extract_tsquery(tsquery, internal, int2, internal, internal, internal, internal),
+  FUNCTION 4 gin_tsquery_consistent(internal, int2, tsquery, int4, internal, internal, internal, internal),
+  FUNCTION 6 d1ctl_tri(internal, int2, tsquery, int4, internal, internal, internal),
+  STORAGE text;
+SELECT 'none' fault, k.* FROM gin_samp, check_under('none', 'ctl_tsvector_ops', 'gin', q) k;
+ fault | law | status |       detail       
+-------+-----+--------+--------------------
+ none  | N1  | pass   | 408 trusted of 848
+(1 row)
+
+SELECT 'tri_overconfident' fault, k.* FROM gin_samp, check_under('tri_overconfident', 'ctl_tsvector_ops', 'gin', q) k;
+       fault       | law | status |                               detail                               
+-------------------+-----+--------+--------------------------------------------------------------------
+ tri_overconfident | N1  | FAIL   | strategy 1: check=M completion=F q='a' answer=1 flag=f reference=0
+(1 row)
+
+-- only an uncertain reference (consistent: true with recheck) can expose this one
+SELECT 'tri_exact_claim' fault, k.* FROM gin_samp, check_under('tri_exact_claim', 'ctl_tsvector_ops', 'gin', q) k;
+      fault      | law | status |                                       detail                                       
+-----------------+-----+--------+------------------------------------------------------------------------------------
+ tri_exact_claim | N1  | FAIL   | strategy 1: check=TT completion=TT q='a' <-> 'b' answer=1 flag=f reference=unknown
+(1 row)
+
+-- answer agrees with the first completion of the input (every M read as F),
+-- not with the others: only a check of every completion exposes it
+SELECT 'tri_first_completion' fault, k.* FROM gin_samp, check_under('tri_first_completion', 'ctl_tsvector_ops', 'gin', q) k;
+        fault         | law | status |                               detail                               
+----------------------+-----+--------+--------------------------------------------------------------------
+ tri_first_completion | N1  | FAIL   | strategy 1: check=M completion=T q='a' answer=0 flag=f reference=1
 (1 row)
 
 RESET d1_ctl.fault;

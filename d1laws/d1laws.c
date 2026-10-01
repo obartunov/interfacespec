@@ -16,6 +16,8 @@
  */
 #include "postgres.h"
 
+#include "access/gin.h"
+#include "access/ginblock.h"
 #include "access/gist.h"
 #include "access/htup_details.h"
 #include "fmgr.h"
@@ -258,4 +260,119 @@ d1_entry_consistent(PG_FUNCTION_ARGS)
 											ObjectIdGetDatum(PG_GETARG_OID(5)),
 											PointerGetDatum(&recheck)));
 	return approx_result(fcinfo, res ? 1 : 0, recheck);
+}
+
+/* ---- protocol: key_vector (presence of query keys in an item) ----
+ * The calling convention of a key-presence consistent family: the query is
+ * turned into a query context by an extract function (role query_context):
+ *   query_context(q) -> {nkeys, keys, extra_data, null_categories}
+ * A check[] vector says which keys are present (F/T, or M = unknown).  The
+ * law uses only nkeys; the adapter passes keys, extra_data and null
+ * categories through untouched; it does not know what any key, extra_data
+ * or strategy means.
+ */
+typedef struct KeyVector
+{
+	int32		nkeys;
+	Datum	   *keys;
+	Pointer    *extra;
+	GinNullCategory *cats;
+} KeyVector;
+
+static KeyVector
+kv_extract(Oid extract, Oid coll, Datum query, int strategy)
+{
+	KeyVector	kv = {0};
+	bool	   *pmatch = NULL;
+	bool	   *nullFlags = NULL;
+	int32		searchMode = GIN_SEARCH_MODE_DEFAULT;
+
+	kv.keys = (Datum *) DatumGetPointer(OidFunctionCall7Coll(extract, coll, query,
+															 PointerGetDatum(&kv.nkeys),
+															 UInt16GetDatum((uint16) strategy),
+															 PointerGetDatum(&pmatch),
+															 PointerGetDatum(&kv.extra),
+															 PointerGetDatum(&nullFlags),
+															 PointerGetDatum(&searchMode)));
+	/* as the core does: null flags become null categories, absent means none */
+	kv.cats = palloc0_array(GinNullCategory, kv.nkeys + 1);
+	if (nullFlags)
+		for (int i = 0; i < kv.nkeys; i++)
+			kv.cats[i] = nullFlags[i] ? GIN_CAT_NULL_KEY : GIN_CAT_NORM_KEY;
+	return kv;
+}
+
+static GinTernaryValue *
+kv_check(text *state, int32 nkeys)
+{
+	char	   *s = text_to_cstring(state);
+	GinTernaryValue *check = palloc0_array(GinTernaryValue, nkeys + 1);
+
+	if ((int32) strlen(s) != nkeys)
+		elog(ERROR, "check vector \"%s\" has %zu entries, query has %d keys", s, strlen(s), nkeys);
+	for (int i = 0; i < nkeys; i++)
+		check[i] = s[i] == 'T' ? GIN_TRUE : s[i] == 'F' ? GIN_FALSE : GIN_MAYBE;
+	return check;
+}
+
+/* d1_kv_nkeys(extract oid, q "any", strategy int) RETURNS int */
+PG_FUNCTION_INFO_V1(d1_kv_nkeys);
+Datum
+d1_kv_nkeys(PG_FUNCTION_ARGS)
+{
+	KeyVector	kv = kv_extract(PG_GETARG_OID(0), PG_GET_COLLATION(), PG_GETARG_DATUM(1), PG_GETARG_INT32(2));
+
+	PG_RETURN_INT32(kv.nkeys);
+}
+
+/*
+ * Approx adapters: (proc, aux = extract, x = check vector as text, q, strategy, subtype).
+ * ternary: F -> (0, false), T -> (1, false), M -> (1, true)
+ */
+PG_FUNCTION_INFO_V1(d1_kv_tri);
+Datum
+d1_kv_tri(PG_FUNCTION_ARGS)
+{
+	Oid			coll = PG_GET_COLLATION();
+	Datum		query = PG_GETARG_DATUM(3);
+	int			strategy = PG_GETARG_INT32(4);
+	KeyVector	kv = kv_extract(PG_GETARG_OID(1), coll, query, strategy);
+	GinTernaryValue *check = kv_check(PG_GETARG_TEXT_PP(2), kv.nkeys);
+	GinTernaryValue r;
+
+	r = DatumGetGinTernaryValue(OidFunctionCall7Coll(PG_GETARG_OID(0), coll,
+													 PointerGetDatum(check),
+													 UInt16GetDatum((uint16) strategy),
+													 query, Int32GetDatum(kv.nkeys),
+													 PointerGetDatum(kv.extra),
+													 PointerGetDatum(kv.keys),
+													 PointerGetDatum(kv.cats)));
+	return approx_result(fcinfo, r == GIN_FALSE ? 0 : 1, r == GIN_MAYBE);
+}
+
+/* boolean: (result, recheck); recheck starts true, as the core does */
+PG_FUNCTION_INFO_V1(d1_kv_consistent);
+Datum
+d1_kv_consistent(PG_FUNCTION_ARGS)
+{
+	Oid			coll = PG_GET_COLLATION();
+	Datum		query = PG_GETARG_DATUM(3);
+	int			strategy = PG_GETARG_INT32(4);
+	KeyVector	kv = kv_extract(PG_GETARG_OID(1), coll, query, strategy);
+	GinTernaryValue *check = kv_check(PG_GETARG_TEXT_PP(2), kv.nkeys);
+	bool		recheck = true;
+	bool		r;
+
+	for (int i = 0; i < kv.nkeys; i++)
+		if (check[i] == GIN_MAYBE)
+			elog(ERROR, "boolean consistent called with an unknown key");
+	r = DatumGetBool(OidFunctionCall8Coll(PG_GETARG_OID(0), coll,
+										  PointerGetDatum(check),
+										  UInt16GetDatum((uint16) strategy),
+										  query, Int32GetDatum(kv.nkeys),
+										  PointerGetDatum(kv.extra),
+										  PointerGetDatum(&recheck),
+										  PointerGetDatum(kv.keys),
+										  PointerGetDatum(kv.cats)));
+	return approx_result(fcinfo, r ? 1 : 0, r && recheck);
 }
