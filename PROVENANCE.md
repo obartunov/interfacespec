@@ -42,3 +42,14 @@ commits and paths where they mention any.
 | D2 | `d83c0f4` | `4df65ea` | d2proto: generic observer and driver for Index AM scan callbacks |
 | D2 | `290829f` | `0dbad1c` | protocolspec: scan callback protocol as data, engine and D2 stand |
 | D2 | `dcbed57` | `03fc266` | D2 inventory, protocol model and result |
+
+## D3 (S6), ported after publication
+
+The S6 work was done on the same source branch after the cut-off
+(`643ebed` session driver and S6 control layers, `eee0516` concurrencyspec,
+D3 engine and stand, `f068294` result).  It was ported as a delta over
+`54ac3c3` (D2 unchanged), not by history extraction, and then changed
+here: removal is classified by what the index holds after each step
+instead of by the start of a remove, `skip_invisible` and a btree
+index-only subject were added, and the result was rewritten.  Uncommitted
+S5-concurrent work on the source branch was not ported.

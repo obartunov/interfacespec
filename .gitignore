@@ -8,3 +8,4 @@ log/
 tmp_check/
 __pycache__/
 check.log
+check_d3.log

@@ -33,9 +33,9 @@ for a separate commit after the standalone build is accepted.
 | `protocolspec/` (10 files) | yes | same | `engine/protocolspec/` | D2 engine, subjects, setup, stand, expected outputs | `290829f` |
 | — | new | `README.md`, `POSTGRESQL.md`, `PROVENANCE.md`, `REPO-INVENTORY.md`, `check.sh`, `.gitignore` | same | standalone repo files | — |
 
-Not included: the PostgreSQL source tree (POSTGRESQL.md); D3 files added on
-the source branch after `dcbed57` (`concurrencyspec-v0.yaml`,
-`protocolspec/d3.py`, `run_d3.sh`, `subjects_d3.yaml`, D3 expected
-outputs, D3 tables in `protocolspec/setup.sql`, `D3-S6-RESULT.md`,
-`D3-S5-RESULT.md`, the session driver and S6/S5 control layers in
-`d2proto/`).
+Not included: the PostgreSQL source tree (POSTGRESQL.md).  D3 (S6) was
+ported later as a delta (PROVENANCE.md): `concurrencyspec-v0.yaml`,
+`protocolspec/d3.py`, `run_d3.sh`, `subjects_d3.yaml`, D3 expected outputs,
+D3 tables in `protocolspec/setup.sql`, `D3-S6-RESULT.md`, `check_d3.sh`,
+the session driver and S6 control layers in `d2proto/`.  S5-concurrent is
+not included.

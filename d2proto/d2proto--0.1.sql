@@ -15,3 +15,10 @@ CREATE FUNCTION d2_observe(idx regclass, query text) RETURNS json
 -- open query as a scroll cursor with the observer on idx, run the fetches
 CREATE FUNCTION d2_observe_cursor(idx regclass, query text, fetches text[]) RETURNS json
   AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
+-- session driver: scans stay open across statements of one transaction
+CREATE FUNCTION d2_open(idx regclass, opr regoperator, val text, index_only bool) RETURNS void
+  AS 'MODULE_PATHNAME' LANGUAGE C;
+CREATE FUNCTION d2_step(step text) RETURNS json
+  AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
+CREATE FUNCTION d2_close() RETURNS json
+  AS 'MODULE_PATHNAME' LANGUAGE C STRICT;

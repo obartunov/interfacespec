@@ -13,6 +13,16 @@
  *	                   entry (S4)
  *	  restore_once     only the first amrestrpos after a mark restores (S5)
  *
+ *	  skip_after_growth   once the index has grown since amrescan (a
+ *	                   concurrent insert split a page), one entry is skipped
+ *	                   (S6: an entry not being inserted or deleted is missed)
+ *	  repeat_after_growth  once the index has grown since amrescan, the
+ *	                   previous entry is returned once more (S6: multiplied)
+ *	  skip_invisible   entries whose heap tuple the scan's snapshot cannot
+ *	                   see are skipped although they are still in the index
+ *	                   (S6: an entry of a deleted row disappears from the
+ *	                   scan without having been removed from the index)
+ *
  *	  Above the observer (a faulty caller):
  *	  caller_more_keys amrescan is called with one key more than
  *	                   ambeginscan announced (S8); the observer's guard
@@ -23,6 +33,9 @@
 #include "postgres.h"
 
 #include "access/relscan.h"
+#include "access/tableam.h"
+#include "storage/bufmgr.h"
+#include "utils/rel.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 
@@ -30,7 +43,8 @@
 
 enum
 {
-	F_NONE, F_ITUP_SHARED, F_DIR_FROM_START, F_RESTORE_ONCE, F_CALLER_MORE_KEYS
+	F_NONE, F_ITUP_SHARED, F_DIR_FROM_START, F_RESTORE_ONCE, F_CALLER_MORE_KEYS,
+	F_SKIP_AFTER_GROWTH, F_REPEAT_AFTER_GROWTH, F_SKIP_INVISIBLE
 };
 
 static const struct config_enum_entry fault_options[] = {
@@ -39,6 +53,9 @@ static const struct config_enum_entry fault_options[] = {
 	{"dir_from_start", F_DIR_FROM_START, false},
 	{"restore_once", F_RESTORE_ONCE, false},
 	{"caller_more_keys", F_CALLER_MORE_KEYS, false},
+	{"skip_after_growth", F_SKIP_AFTER_GROWTH, false},
+	{"repeat_after_growth", F_REPEAT_AFTER_GROWTH, false},
+	{"skip_invisible", F_SKIP_INVISIBLE, false},
 	{NULL, 0, false}
 };
 
@@ -54,6 +71,10 @@ typedef struct CtlScan
 	IndexScanDesc scan;
 	int			lastdir;		/* 0 none, 1 forward, -1 backward (since rescan) */
 	int			restores;		/* since last mark */
+	BlockNumber nblocks;		/* index size at amrescan */
+	bool		fired;			/* growth fault applied (once per rescan) */
+	ItemPointerData last;		/* previous returned TID */
+	bool		haslast;
 } CtlScan;
 
 static CtlScan cscans[16];
@@ -89,13 +110,21 @@ cscan(IndexScanDesc scan)
 	cscans[ncscans].scan = scan;
 	cscans[ncscans].lastdir = 0;
 	cscans[ncscans].restores = 0;
+	cscans[ncscans].nblocks = InvalidBlockNumber;
+	cscans[ncscans].fired = false;
+	cscans[ncscans].haslast = false;
 	return &cscans[ncscans++];
 }
 
 static void
 ctl_rescan(IndexScanDesc scan, ScanKey keys, int nkeys, ScanKey orderbys, int norderbys)
 {
-	cscan(scan)->lastdir = 0;
+	CtlScan    *c = cscan(scan);
+
+	c->lastdir = 0;
+	c->nblocks = RelationGetNumberOfBlocks(scan->indexRelation);
+	c->fired = false;
+	c->haslast = false;
 	real->amrescan(scan, keys, nkeys, orderbys, norderbys);
 }
 
@@ -120,6 +149,31 @@ ctl_gettuple(IndexScanDesc scan, ScanDirection dir)
 	}
 	c->lastdir = d;
 	ret = real->amgettuple(scan, dir);
+
+	while (fault == F_SKIP_INVISIBLE && ret && scan->heapRelation)
+	{
+		ItemPointerData tid = scan->xs_heaptid;
+
+		if (table_fetch_tid(scan->heapRelation, &tid, scan->xs_snapshot, NULL))
+			break;
+		ret = real->amgettuple(scan, dir);
+	}
+
+	if ((fault == F_SKIP_AFTER_GROWTH || fault == F_REPEAT_AFTER_GROWTH) && ret && !c->fired &&
+		c->nblocks != InvalidBlockNumber &&
+		RelationGetNumberOfBlocks(scan->indexRelation) > c->nblocks)
+	{
+		c->fired = true;
+		if (fault == F_SKIP_AFTER_GROWTH)
+			ret = real->amgettuple(scan, dir);
+		else if (c->haslast)
+			scan->xs_heaptid = c->last;
+	}
+	if (ret)
+	{
+		c->last = scan->xs_heaptid;
+		c->haslast = true;
+	}
 
 	if (fault == F_ITUP_SHARED && ret && scan->xs_want_itup)
 	{
@@ -162,7 +216,6 @@ const IndexAmRoutine *
 d2ctl_am_layer(const IndexAmRoutine *r)
 {
 	real = r;
-	ncscans = 0;
 	if (fault == F_NONE || fault == F_CALLER_MORE_KEYS)
 		return r;
 	am_layer = *r;

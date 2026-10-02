@@ -1,0 +1,60 @@
+# concurrencyspec-v0: a second actor between callbacks of an open scan, and
+# the set of allowed outcomes of a history (S6, indexam.sgml:1024-1032).
+#
+# Delta over protocolspec-v0: the scan protocol (state, obligations,
+# domains, expectations) is used unchanged; nothing in it is changed.
+
+version: concurrencyspec-v0
+base: protocolspec-v0
+
+actors:
+  A: {protocol: index_scan}            # one scan, kept open across statements of one transaction
+  B:                                   # another session, autocommit
+    acts: between_callbacks            # only while A is between two of its callbacks
+    operations:
+      insert: {entries: inserted}      # adds index entries
+      remove: {entries: removed}       # VACUUM: removes entries of rows deleted before A began
+    state_of_operation:                # read from the server, never from elapsed time
+      completed: the statement returned
+      blocked: pg_stat_activity of B shows wait_event_type Lock, Buffer or BufferPin;
+               B does nothing more in this history; the statement completes after A
+               moves off the page or ends
+      settled: after B's operation and after each step of A while it runs, the
+               stand waits until B is completed or blocked (60 s - a hung stand, an
+               error, not a state)
+
+# indexam.sgml:1024-1032: "insertions or deletions [must] not cause the scan
+# to miss or multiply return entries that were not themselves being
+# inserted or deleted"; an inserted entry may or may not be returned, also
+# upon rescan or backing up; a concurrent delete may or may not be
+# reflected.
+outcomes:
+  must: stable                         # entries present when A began and not removed during the scan
+  may: [inserted, removed]
+  removed: >-
+    an entry of a row deleted before A began, once it is observed gone from
+    the index: after each step of A (and after B's remove), with B settled,
+    a fresh forward scan from a third session lists what the index holds;
+    the deleted entries it no longer lists are removed for that step and
+    every later one.  Removal is monotonic, so an entry still listed was
+    in the index during the whole step: it stays must.  Neither the
+    presence of a remove in the history nor its start makes anything may;
+    a blocked VACUUM that has not reached an entry leaves it must.
+  must_not: other                      # entries that were never in the index during the scan
+  rule: >-
+    an inserted entry leaves the scan between the same reference entries (it
+    does not move the protocolspec model; it does count as a returned entry
+    for positioned/first/ran_off); a removed entry is optional: in its place
+    the scan may return it or skip it; every other outcome is checked
+    against the protocolspec model over the reference entries: in the order
+    of the reference forward pass if amcanorder, otherwise in the order in
+    which the scan first returns them (any not yet returned may come next)
+
+# A's obligations and domains are evaluated on the observed state before
+# each of A's operations: an operation outside them is not run (counted,
+# not failed) and the history goes on.  A.get*3: three gets in the same
+# direction, each checked (lets short histories cross pages).
+generation:
+  prologue: [A.begin, A.rescan(given)]
+  alphabet: [A.get*3, B.insert, B.remove]
+  limits: {B.insert: 2, B.remove: 1}

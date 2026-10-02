@@ -19,7 +19,7 @@ part of this repository (POSTGRESQL.md).
             |
     callback protocol           D2   order of callbacks, state, lifetime of results
             |
-    concurrency                 D3   (not in this baseline)
+    concurrency                 D3   a second session between callbacks; allowed outcomes (S6)
 
 D1: a check is generated, not written per AM:
 
@@ -48,6 +48,7 @@ by layer; not every AM went through every layer.
 | D1 laws (`d1laws`) | O1–O9, 5 opclasses/collations | H1–H6, 2 opclasses | G1, `poly_ops` | N1 (triConsistent via K3), `tsvector_ops` |
 | D1 btree-specific checker (`opclass_laws`) | O1–O9 | — | — | — |
 | D2 protocol (`protocolspec`) | S4, S5 (one session), S7, S8 | S4, S8 | S4 (forward only), S7, S8 | — (no `amgettuple`) |
+| D3 concurrency (`concurrencyspec`, `check_d3.sh`) | S6 (plain and index-only scan) | S6 | S6 | — |
 
 Each layer has control variants that break one property and must be caught;
 see the result documents.  Discrepancies between documentation and
@@ -57,6 +58,7 @@ D2-INVENTORY.md, D2-RESULT.md); none of them changes a query result.
 ## Running
 
     ./check.sh      # builds and installs the extensions, runs the D0–D2 gates
+    ./check_d3.sh   # D3 (S6); needs python3-psycopg2
 
 Prerequisites: POSTGRESQL.md.
 

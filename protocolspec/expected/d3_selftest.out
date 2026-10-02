@@ -1,0 +1,10 @@
+== model-level controls
+   ok   unordered AM, stable entries in another order than the reference: pass (want pass)
+   ok   ordered AM, the same observation: FAIL (want FAIL)
+   ok   unordered AM, a stable entry missing at the end: FAIL (want FAIL)
+   ok   unordered AM, backing up retraces its own order: pass (want pass)
+   ok   gap: back from an inserted entry returns the last stable one: pass (want pass)
+   ok   deleted entry skipped after the remove removed it: pass (want pass)
+   ok   deleted entry skipped before any remove: FAIL (want FAIL)
+   ok   remove attempted but blocked, entry still in the index, skipped: FAIL (want FAIL)
+   ok   deleted entry still returned after the remove removed it: pass (want pass)

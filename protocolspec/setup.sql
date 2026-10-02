@@ -19,3 +19,11 @@ CREATE TABLE o (k text, i int4);
 INSERT INTO o SELECT k, 1 FROM bt UNION ALL SELECT k, 2 FROM bt;
 INSERT INTO o SELECT NULL, i % 5 FROM generate_series(1, 6) i;
 VACUUM ANALYZE bt, ht, gt, o;
+-- D3 (S6): tables reset by each history; no autovacuum
+CREATE TABLE c_bt (k text) WITH (autovacuum_enabled = off);
+ALTER TABLE c_bt ALTER k SET STORAGE PLAIN;
+CREATE INDEX c_bt_k ON c_bt (k);
+CREATE TABLE c_ht (k int4) WITH (autovacuum_enabled = off);
+CREATE INDEX c_ht_k ON c_ht USING hash (k);
+CREATE TABLE c_gt (p point) WITH (autovacuum_enabled = off);
+CREATE INDEX c_gt_p ON c_gt USING gist (p) WITH (fillfactor = 10);
