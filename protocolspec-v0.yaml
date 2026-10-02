@@ -1,0 +1,121 @@
+# protocolspec-v0: the Index AM scan callback protocol as data.
+#
+# Delta over interfacespec-v0 (e88eac6); v0 is not changed.  Uses from v0
+# only the capabilities (IndexAmRoutine fields) of interface index_am.
+# Holds only what S4, S5 (one session), S7 and S8 needed (D2-RESULT.md).
+#
+# Expressions are Python expressions over:
+#   s    state of the scan the operation is applied to
+#   arg  the operation's arguments
+#   cap  capabilities of the index's AM (v0 capability names)
+#   L, n reference sequence of the scan and its length (see reference)
+#   ok   amgettuple returned an entry: expected when generating histories,
+#        observed when checking what the executor called
+# "obligation" is a documented requirement on the caller: violating it is
+# the caller's fault; it needs neither L nor n and is also checked on what
+# the executor actually calls.  "domain" is where the interface defines the
+# expected behaviour, without documenting a caller requirement: histories
+# outside it are not generated and not asserted, and a caller found
+# outside it is reported, not accused.  "expect" is the AM's side: what the
+# observation must show.
+
+version: protocolspec-v0
+base: interfacespec-v0
+
+protocols:
+  index_scan:
+    requires: [amgettuple]
+
+    # L: the TIDs a fresh forward scan with the same keys returns; checked
+    # against the seqscan (same set) and, if amcanorder, the value order.
+    reference: {kind: forward_pass, checked_against: seqscan}
+
+    state:                        # per scan, initial values
+      phase: none                 # none | begun | ready
+      pos: null                   # null: no amgettuple since amrescan; -1, n: ran off an end; else index into L
+      positioned: false           # last amgettuple returned an entry (or amrestrpos put the scan on one)
+      first: null                 # direction of the first amgettuple since amrescan
+      ran_off: null               # direction of an amgettuple that returned false, until the next success
+      mark: null                  # marked index into L
+
+    observables:
+      returned_data:
+        produced_by: amgettuple
+        fields: [xs_itup, xs_hitup]
+        when: xs_want_itup
+        lifetime_ends: [amgettuple, amrescan, amendscan]      # indexam.sgml: "at least until the next ..."
+        contract: S7
+
+    operations:
+      begin:
+        callback: ambeginscan
+        obligation: "s.phase == 'none'"
+        effect: {phase: "'begun'"}
+
+      rescan:
+        callback: amrescan
+        args: {keys: [given, nullkeys]}                       # nullkeys: restart with the previous keys
+        obligation: "s.phase == 'ready' if arg.keys == 'nullkeys' else s.phase != 'none'"
+        guard: ["amrescan.nkeys <= ambeginscan.nkeys", "amrescan.norderbys <= ambeginscan.norderbys"]
+        contract: S8
+        effect: {phase: "'ready'", pos: "None", positioned: "False", first: "None", ran_off: "None", mark: "None"}
+
+      get:
+        callback: amgettuple
+        args: {direction: [forward, backward]}
+        obligation: >-
+          s.phase == 'ready'
+          and (s.pos is not None or arg.direction == 'forward' or cap.amcanorder)
+          and (cap.amcanbackward or s.first in (None, arg.direction))
+        domain: "s.ran_off != arg.direction"
+        let:
+          next: "((0 if arg.direction == 'forward' else n - 1) if s.pos is None
+                  else s.pos + (1 if arg.direction == 'forward' else -1))"
+        expect:
+          ret: "0 <= next < n"
+          tid: "L[next] if 0 <= next < n else None"
+        contract: S4
+        effect:
+          pos: "next"
+          positioned: "ok"
+          first: "s.first or arg.direction"
+          ran_off: "None if ok else arg.direction"
+        notes:
+          domain: >-
+            indexam.sgml says nothing about a call after false; the executor
+            never repeats the direction (a portal at its end does not run the
+            plan); nbtree and hash restart the scan if it is repeated (observed)
+
+      mark:
+        callback: ammarkpos
+        requires: [ammarkpos]
+        obligation: "s.phase == 'ready'"
+        domain: "s.positioned"               # sgml: "mark current scan position"; the executor marks only a returned entry
+        contract: S5
+        effect: {mark: "s.pos"}
+
+      restore:
+        callback: amrestrpos
+        requires: [amrestrpos]
+        obligation: "s.phase == 'ready'"
+        domain: "s.mark is not None"         # sgml does not say what restore without a mark does
+        contract: S5
+        effect: {pos: "s.mark", positioned: "True", ran_off: "None"}
+
+      end:
+        callback: amendscan
+        obligation: "s.phase != 'none'"
+        effect: {phase: "'none'"}
+
+    # bounded enumeration: prologue, then every body of length 1..depth whose
+    # operations satisfy their obligations and lie in their domains, then
+    # amendscan for open scans
+    generation:
+      single:
+        scans: [A]
+        prologue: [A.begin, A.rescan(given)]
+        alphabet: [A.get, A.mark, A.restore, A.rescan]
+      interleaved:
+        scans: [A, B]
+        prologue: [A.begin, A.rescan(given), B.begin, B.rescan(given)]
+        alphabet: [A.get, B.get]

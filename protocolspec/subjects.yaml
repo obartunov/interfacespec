@@ -1,0 +1,47 @@
+# D2 subjects: test data, not spec.  Tables come from setup.sql.
+- name: btree text, k > 'k05', index-only
+  index: bt_k
+  opr: '>(text,text)'
+  val: k05
+  index_only: true
+  profiles: {single: 6, interleaved: 4}
+  executor:
+    - name: scroll cursor
+      setup: "SET enable_seqscan = off; SET enable_bitmapscan = off;"
+      sql: "SELECT k FROM bt WHERE k > 'k05' ORDER BY k"
+      fetch: [forward 2, backward 1, absolute -1, backward 2, absolute 1, forward all, backward all, forward 1]
+    - name: nested loop rescans
+      setup: "SET enable_seqscan = off; SET enable_bitmapscan = off; SET enable_hashjoin = off; SET enable_mergejoin = off; SET enable_material = off; SET enable_memoize = off;"
+      sql: "SELECT count(*) FROM o JOIN bt ON bt.k > o.k"
+    - name: merge join mark/restore
+      setup: "SET enable_seqscan = off; SET enable_bitmapscan = off; SET enable_hashjoin = off; SET enable_nestloop = off;"
+      sql: "SELECT count(*) FROM o JOIN bt ON o.k = bt.k WHERE o.k IS NOT NULL"
+
+- name: btree text, no keys
+  index: bt_k
+  opr: null
+  val: null
+  index_only: false
+  profiles: {single: 4}
+
+- name: hash int4, k = 2
+  index: ht_k
+  opr: '=(int4,int4)'
+  val: '2'
+  index_only: false
+  profiles: {single: 5}
+  executor:
+    - name: nested loop rescans
+      setup: "SET enable_seqscan = off; SET enable_bitmapscan = off; SET enable_hashjoin = off; SET enable_mergejoin = off; SET enable_memoize = off;"
+      sql: "SELECT count(*) FROM o JOIN ht ON ht.k = o.i"
+
+- name: gist point, p <@ box, index-only
+  index: gt_p
+  opr: '<@(point,box)'
+  val: '((0,0),(4.5,4.5))'
+  index_only: true
+  profiles: {single: 5, interleaved: 4}
+  executor:
+    - name: nested loop rescans, index-only
+      setup: "SET enable_seqscan = off; SET enable_bitmapscan = off; SET enable_hashjoin = off; SET enable_mergejoin = off; SET enable_memoize = off;"
+      sql: "SELECT count(*) FROM gt a JOIN gt b ON b.p <@ box(a.p, point(0,0))"

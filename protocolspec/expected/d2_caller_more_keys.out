@@ -1,0 +1,58 @@
+fault: caller_more_keys
+== btree text, k > 'k05', index-only  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
+   reference: n=5; seqscan set same; value order same
+   single depth 6: 7880 histories, 70920 callbacks
+     begin=7880 end=7880 get(backward)=10803 get(forward)=10803 mark=5698 rescan(given)=17072 rescan(nullkeys)=9192 restore=1592
+     result: FAIL S8
+     S8: minimal history (state before -> observed -> state after):
+       begin                  [phase=none]  [phase=begun]
+       rescan(given)          [phase=begun]  [phase=ready]
+     expected: call forwarded
+     observed: refused: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   interleaved depth 4: 216 histories, 2160 callbacks
+     begin=432 end=432 get(backward)=432 get(forward)=432 rescan(given)=432
+     result: FAIL S8
+     S8: minimal history (state before -> observed -> state after):
+       A.begin                [phase=none]  [phase=begun]
+       A.rescan(given)        [phase=begun]  [phase=ready]
+     expected: call forwarded
+     observed: refused: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   executor scroll cursor: ERROR:  d2proto: caller obligation violated: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   executor nested loop rescans: ERROR:  d2proto: caller obligation violated: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   executor merge join mark/restore: FAIL S7: returned data changed on scan s1
+     amgettuple(forward) = (0,3) -> amrestrpos -> amgettuple
+== btree text, no keys  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
+   reference: n=9; seqscan set same; value order same
+   single depth 4: 366 histories, 2562 callbacks
+     begin=366 end=366 get(backward)=342 get(forward)=342 mark=146 rescan(given)=670 rescan(nullkeys)=304 restore=26
+     result: pass
+== hash int4, k = 2  caps: amcanbackward amgettuple
+   reference: n=4; seqscan set same
+   single depth 5: 366 histories, 2928 callbacks
+     begin=366 end=366 get(backward)=138 get(forward)=656 rescan(given)=884 rescan(nullkeys)=518
+     result: FAIL S8
+     S8: minimal history (state before -> observed -> state after):
+       begin                  [phase=none]  [phase=begun]
+       rescan(given)          [phase=begun]  [phase=ready]
+     expected: call forwarded
+     observed: refused: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   executor nested loop rescans: ERROR:  d2proto: caller obligation violated: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+== gist point, p <@ box, index-only  caps: amcanreturn amgettuple amoptionalkey
+   reference: n=4; seqscan set same
+   single depth 5: 243 histories, 1944 callbacks
+     begin=243 end=243 get(forward)=405 rescan(given)=648 rescan(nullkeys)=405
+     result: FAIL S8
+     S8: minimal history (state before -> observed -> state after):
+       begin                  [phase=none]  [phase=begun]
+       rescan(given)          [phase=begun]  [phase=ready]
+     expected: call forwarded
+     observed: refused: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   interleaved depth 4: 16 histories, 160 callbacks
+     begin=32 end=32 get(forward)=64 rescan(given)=32
+     result: FAIL S8
+     S8: minimal history (state before -> observed -> state after):
+       A.begin                [phase=none]  [phase=begun]
+       A.rescan(given)        [phase=begun]  [phase=ready]
+     expected: call forwarded
+     observed: refused: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
+   executor nested loop rescans, index-only: ERROR:  d2proto: caller obligation violated: amrescan.nkeys <= ambeginscan.nkeys (2 vs 1)
