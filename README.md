@@ -72,4 +72,9 @@ Prerequisites: POSTGRESQL.md.
 | `protocolspec/` | D2 engine, subjects, stand |
 | `opclass_laws/`, `d0gen/`, `d1laws/`, `d2proto/` | PostgreSQL extensions (checkers, observer/driver, control opclasses and layers) |
 
-Provenance of the history: PROVENANCE.md.
+## Authorship and license
+
+InterfaceSpec is a research project led by Oleg Bartunov and developed
+interactively with AI coding agents; commit metadata preserves the
+authorship recorded during the experiments (PROVENANCE.md).  PostgreSQL
+License (LICENSE).

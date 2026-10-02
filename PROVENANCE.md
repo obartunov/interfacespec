@@ -1,5 +1,11 @@
 # Provenance
 
+InterfaceSpec is a research project led by Oleg Bartunov and developed
+interactively with AI coding agents.  Commit metadata preserves the
+authorship recorded during the experiments (author and committer
+`Claude <noreply@anthropic.com>`, with `Co-Authored-By` trailers); the
+history was not rewritten for publication.
+
 This repository was extracted from the working branch in which the
 experiments were done; that branch stays the source of provenance.
 
