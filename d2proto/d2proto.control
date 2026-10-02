@@ -1,0 +1,4 @@
+comment = 'D2: observer and driver for Index AM scan callbacks (test only)'
+default_version = '0.1'
+module_pathname = '$libdir/d2proto'
+relocatable = true
