@@ -1,6 +1,6 @@
 fault: skip_after_growth
 == btree text, k > 'k03'  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 36
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -10,7 +10,7 @@ fault: skip_after_growth
      reference: 10 entries; deleted before A: 2; inserted: 3
      expected (3,3), observed (3,2)
 == btree text, k > 'k03', index-only (the scan keeps its leaf pin)  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 25
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -31,7 +31,7 @@ fault: skip_after_growth
      reference: 10 entries; deleted before A: 2; observed removed: 0; inserted: 3
      expected (1,3), observed (2,1)
 == hash int4, k = 2  caps: amcanbackward amgettuple
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 32
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -55,16 +55,16 @@ fault: skip_after_growth
      reference: 8 entries; deleted before A: 2; observed removed: 0; inserted: 200
      expected (1,124), observed (1,174)
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 40
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
        A.rescan(given)
-       B.remove -> completed; removed from the index so far: 1 of 1
        A.get(forward)     [phase=ready] -> (0,1)  [phase=ready pos=0]
        A.get(forward)     [phase=ready pos=0] -> (0,100)  [phase=ready pos=1]
-       A.get(forward)     [phase=ready pos=1] -> (1,15)  [phase=ready pos=2]
+       A.get(forward)     [phase=ready pos=1] -> (0,101) (deleted)  [phase=ready pos=2]
        B.insert -> 1 entries
-       A.get(forward)     [phase=ready pos=2] -> false  []
-     reference: 5 entries; deleted before A: 1; observed removed: 1; inserted: 1
+       A.get(forward)     [phase=ready pos=2] -> (1,16)  [phase=ready pos=3]
+       A.get(forward)     [phase=ready pos=3] -> false  []
+     reference: 5 entries; deleted before A: 1; inserted: 1
      expected one of the 1 stable entries not yet returned, observed false

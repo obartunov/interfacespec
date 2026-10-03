@@ -1,6 +1,6 @@
 fault: repeat_after_growth
 == btree text, k > 'k03'  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 40
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -13,7 +13,7 @@ fault: repeat_after_growth
      reference: 10 entries; deleted before A: 2; inserted: 3
      expected (1,3), observed (1,2)
 == btree text, k > 'k03', index-only (the scan keeps its leaf pin)  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 27
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -37,7 +37,7 @@ fault: repeat_after_growth
      reference: 10 entries; deleted before A: 2; observed removed: 0; inserted: 3
      expected (1,3), observed (1,2)
 == hash int4, k = 2  caps: amcanbackward amgettuple
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 32
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -61,7 +61,7 @@ fault: repeat_after_growth
      reference: 8 entries; deleted before A: 2; observed removed: 0; inserted: 200
      expected one of the 5 stable entries not yet returned, observed (1,74)
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 40
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin

@@ -8,3 +8,6 @@
    ok   deleted entry skipped before any remove: FAIL (want FAIL)
    ok   remove attempted but blocked, entry still in the index, skipped: FAIL (want FAIL)
    ok   deleted entry still returned after the remove removed it: pass (want pass)
+== heap TID reuse guard (stand level)
+   ok   insert returns new TIDs only: normal (want normal)
+   ok   insert reuses an initial TID: BOUNDARY (want BOUNDARY)

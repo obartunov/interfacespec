@@ -50,6 +50,14 @@ outcomes:
     of the reference forward pass if amcanorder, otherwise in the order in
     which the scan first returns them (any not yet returned may come next)
 
+# Boundary of the observer, not part of S6: an index entry is identified by
+# its heap TID.  A history in which a concurrently inserted row gets the TID
+# of an entry that was in the index when A began (TIDs freed by VACUUM) is
+# outside the experiment: it ends as BOUNDARY, with no S6 verdict.
+observer_boundary:
+  entry_identity: heap TID
+  outside: inserted row's TID in the reference set at the start of A
+
 # A's obligations and domains are evaluated on the observed state before
 # each of A's operations: an operation outside them is not run (counted,
 # not failed) and the history goes on.  A.get*3: three gets in the same

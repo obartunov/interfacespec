@@ -1,6 +1,6 @@
 fault: skip_invisible
 == btree text, k > 'k03'  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 38
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -12,7 +12,7 @@ fault: skip_invisible
      reference: 10 entries; deleted before A: 2; inserted: 0
      expected (1,3), observed (2,1)
 == btree text, k > 'k03', index-only (the scan keeps its leaf pin)  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 27
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -35,7 +35,7 @@ fault: skip_invisible
      reference: 10 entries; deleted before A: 2; observed removed: 0; inserted: 3
      expected (1,3), observed (2,1)
 == hash int4, k = 2  caps: amcanbackward amgettuple
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 32
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin
@@ -50,7 +50,7 @@ fault: skip_invisible
      reference: 8 entries; deleted before A: 2; inserted: 0
      expected one of the 2 stable entries not yet returned, observed false
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 39
      result: FAIL S6
      history (state before -> observed -> state after):
        A.begin

@@ -220,6 +220,14 @@ class Checker:
         return None
 
 
+def tid_reuse(initial_tids, inserted_tids):
+    """The observer identifies an index entry by heap TID.  An inserted row
+    that got the TID of an entry present when the scan began would be
+    indistinguishable from it: such a history is outside the experiment
+    (BOUNDARY), whatever the scan returns."""
+    return set(inserted_tids) & set(initial_tids)
+
+
 def selftest(pspec):
     """Model-level controls, no database: each case must give the stated
     verdict, so a change of the outcome rules shows up here."""
@@ -264,6 +272,12 @@ def selftest(pspec):
     out = ['== model-level controls']
     for text, want, got in cases:
         out.append(f"   {'ok  ' if got == want else 'BAD '} {text}: {got} (want {want})")
+    out.append('== heap TID reuse guard (stand level)')
+    for text, initial, inserted, want in [
+            ('insert returns new TIDs only', {'T1', 'T2'}, {'T3'}, 'normal'),
+            ('insert reuses an initial TID', {'T1', 'T2'}, {'T2', 'T3'}, 'BOUNDARY')]:
+        got = 'BOUNDARY' if tid_reuse(initial, inserted) else 'normal'
+        out.append(f"   {'ok  ' if got == want else 'BAD '} {text}: {got} (want {want})")
     return out
 
 
@@ -305,7 +319,8 @@ def run_subject(pspec, cspec, subj, fault, depth):
     opr, val = subj.get('opr'), subj.get('val')
     stats = {'histories': len(bodies), 'cut': 0, 'gets': 0, 'may': 0, 'inserted': 0,
              'completed': 0, 'blocked': 0, 'b_waiting': 0, 'skipped': 0,
-             'removed_observed': 0, 'removed_while_waiting': 0, 'blocked_histories': 0}
+             'removed_observed': 0, 'removed_while_waiting': 0, 'blocked_histories': 0,
+             'boundary': 0}
     worst = None
     worst_blocked = None     # the minimal failing history in which a remove was blocked by A
     for bd in bodies:
@@ -314,7 +329,8 @@ def run_subject(pspec, cspec, subj, fault, depth):
             worst = res
         if res and res[2] and (worst_blocked is None or res[0] < worst_blocked[0]):
             worst_blocked = res
-    out.append(f"   depth {depth}: {stats['histories']} histories")
+    out.append(f"   depth {depth}: {stats['histories']} histories"
+               + (f"; BOUNDARY (heap TID reused by an insert): {stats['boundary']}" if stats['boundary'] else ""))
     ev = (f"{subj['name']} [{fault}]: {stats['gets']} amgettuple, cut by obligation/domain {stats['cut']}; "
           f"inserted entries {stats['inserted']}, returned {stats['may']}; remove completed at once {stats['completed']}, "
           f"blocked by A {stats['blocked']} (histories where it waited {stats['blocked_histories']}; B operations not run "
@@ -356,6 +372,7 @@ def run_history(proto, cap, a, b, subj, opr, val, body, stats):
     steps = 0
     nins = 0
     removal = {'began': False, 'final': False}
+    boundary = None
 
     def refresh_removed():
         """After a remove started: wait until B has completed or waits for
@@ -412,7 +429,12 @@ def run_history(proto, cap, a, b, subj, opr, val, body, stats):
         if name == 'insert':
             nins += 1
             rows = b.run(subj['insert'].replace('{n}', str(nins)))
-            new = {r[0] for r in rows if r[0]}
+            reused = tid_reuse(L, [r[0] for r in rows])
+            if reused:
+                boundary = f"heap TID reused by an insert ({len(reused)}: {', '.join(sorted(reused, key=engine.tid_key))}); the observer identifies entries by TID"
+                lines.append(f"       B.insert -> BOUNDARY: {boundary}")
+                break
+            new = {r[0] for r in rows if r[1]}
             chk.inserted |= new
             stats['inserted'] += len(new)
             lines.append(f"       B.insert -> {len(new)} entries")
@@ -428,6 +450,9 @@ def run_history(proto, cap, a, b, subj, opr, val, body, stats):
     blocked = b.was_blocked
     if blocked:
         stats['blocked_histories'] += 1
+    if boundary:
+        stats['boundary'] += 1
+        return None
     b.finish()
     stats['skipped'] += len(chk.skipped)
     if fail:

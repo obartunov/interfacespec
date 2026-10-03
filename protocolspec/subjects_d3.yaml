@@ -1,4 +1,5 @@
 # D3 (S6) subjects: data for the actors, not spec.  {n} numbers inserts.
+# insert returns (ctid, matches the scan's qual) for every inserted row.
 - name: btree text, k > 'k03'
   index: c_bt_k
   table: c_bt
@@ -8,7 +9,7 @@
   depth: 4
   reset: "TRUNCATE c_bt; INSERT INTO c_bt SELECT 'k' || lpad(i::text, 2, '0') || repeat('x', 2600) FROM generate_series(1, 12) i"
   delete: "DELETE FROM c_bt WHERE k LIKE 'k06%' OR k LIKE 'k09%' RETURNING ctid::text"
-  insert: "INSERT INTO c_bt SELECT 'k0' || (4 + g * 2) || 'n{n}' || repeat('y', 2600) FROM generate_series(0, 2) g RETURNING ctid::text"
+  insert: "INSERT INTO c_bt SELECT 'k0' || (4 + g * 2) || 'n{n}' || repeat('y', 2600) FROM generate_series(0, 2) g RETURNING ctid::text, true"
   remove: "VACUUM c_bt"
 - name: btree text, k > 'k03', index-only (the scan keeps its leaf pin)
   index: c_bt_k
@@ -20,7 +21,7 @@
   index_only: true
   reset: "TRUNCATE c_bt; INSERT INTO c_bt SELECT 'k' || lpad(i::text, 2, '0') || repeat('x', 2600) FROM generate_series(1, 12) i"
   delete: "DELETE FROM c_bt WHERE k LIKE 'k06%' OR k LIKE 'k09%' RETURNING ctid::text"
-  insert: "INSERT INTO c_bt SELECT 'k0' || (4 + g * 2) || 'n{n}' || repeat('y', 2600) FROM generate_series(0, 2) g RETURNING ctid::text"
+  insert: "INSERT INTO c_bt SELECT 'k0' || (4 + g * 2) || 'n{n}' || repeat('y', 2600) FROM generate_series(0, 2) g RETURNING ctid::text, true"
   remove: "VACUUM c_bt"
 - name: hash int4, k = 2
   index: c_ht_k
@@ -31,7 +32,7 @@
   depth: 4
   reset: "TRUNCATE c_ht; INSERT INTO c_ht SELECT CASE WHEN i % 50 = 0 THEN 2 ELSE i + 10 END FROM generate_series(1, 400) i"
   delete: "DELETE FROM c_ht WHERE ctid IN (SELECT ctid FROM c_ht WHERE k = 2 ORDER BY ctid OFFSET 3 LIMIT 2) RETURNING ctid::text"
-  insert: "INSERT INTO c_ht SELECT CASE WHEN g % 10 = 0 THEN 2 ELSE g + {n} * 100000 END FROM generate_series(1, 2000) g RETURNING (CASE WHEN k = 2 THEN ctid::text END)"
+  insert: "INSERT INTO c_ht SELECT CASE WHEN g % 10 = 0 THEN 2 ELSE g + {n} * 100000 END FROM generate_series(1, 2000) g RETURNING ctid::text, k = 2"
   remove: "VACUUM c_ht"
 - name: gist point, p <@ box
   index: c_gt_p
@@ -42,5 +43,5 @@
   depth: 4
   reset: "TRUNCATE c_gt; INSERT INTO c_gt SELECT point(i % 100, i / 100) FROM generate_series(1, 2000) i"
   delete: "DELETE FROM c_gt WHERE p ~= point(1, 1) RETURNING ctid::text"
-  insert: "INSERT INTO c_gt SELECT point(1.2 + (g % 20) / 10.0, (g / 20) / 5.0) FROM generate_series(1, 300) g UNION ALL SELECT point(0.5, {n} / 4.0) RETURNING (CASE WHEN p <@ box '((0,0),(1,2))' THEN ctid::text END)"
+  insert: "INSERT INTO c_gt SELECT point(1.2 + (g % 20) / 10.0, (g / 20) / 5.0) FROM generate_series(1, 300) g UNION ALL SELECT point(0.5, {n} / 4.0) RETURNING ctid::text, p <@ box '((0,0),(1,2))'"
   remove: "VACUUM c_gt"

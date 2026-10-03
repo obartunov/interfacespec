@@ -1,13 +1,13 @@
 fault: none
 == btree text, k > 'k03'  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 40
      result: pass
 == btree text, k > 'k03', index-only (the scan keeps its leaf pin)  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 27
      result: pass
 == hash int4, k = 2  caps: amcanbackward amgettuple
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 32
      result: pass
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey
-   depth 4: 176 histories
+   depth 4: 176 histories; BOUNDARY (heap TID reused by an insert): 40
      result: pass
