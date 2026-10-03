@@ -58,11 +58,38 @@ observer_boundary:
   entry_identity: heap TID
   outside: inserted row's TID in the reference set at the start of A
 
+# S5-concurrent (indexam.sgml:1013-1020, 1024): "Both the scan position and
+# the mark position (if any) must be maintained consistently".  The mark is
+# a logical position over the reference entries, not a physical one: the
+# protocolspec state (mark: s.pos) plus whether A stood between two
+# reference entries after returning an inserted one (gap).  restore puts A
+# back there; what A may then return is the S6 outcome set above.  If the
+# marked entry is itself removed, the stable entries around it still fix
+# the position; whether the removed marked entry may be returned once more
+# right after restore is not said by the interface.
+mark:
+  position: [s.mark, gap]              # gap: A stood after an inserted entry when it marked
+  marked_entry_removed: >-
+    the next stable entry in the direction of the scan is still must and
+    no stable entry before the mark may be returned; the removed marked
+    entry returned again as the first outcome after restore ends the
+    history as DOMAIN (no verdict)
+
 # A's obligations and domains are evaluated on the observed state before
 # each of A's operations: an operation outside them is not run (counted,
 # not failed) and the history goes on.  A.get*3: three gets in the same
-# direction, each checked (lets short histories cross pages).
+# direction, each checked (lets short histories cross pages).  B: any
+# operation of B.  order: bodies hold these operations in this order.
 generation:
-  prologue: [A.begin, A.rescan(given)]
-  alphabet: [A.get*3, B.insert, B.remove]
-  limits: {B.insert: 2, B.remove: 1}
+  s6:
+    contract: S6
+    prologue: [A.begin, A.rescan(given)]
+    alphabet: [A.get*3, B.insert, B.remove]
+    limits: {B.insert: 2, B.remove: 1}
+  s5_concurrent:
+    contract: S5-concurrent
+    prologue: [A.begin, A.rescan(given), A.get(forward)]
+    alphabet: [A.get(forward), A.mark, A.restore, B.insert, B.remove]
+    limits: {A.mark: 1, A.restore: 1, B: 1}
+    order: [A.mark, A.restore]
+    depth: 8

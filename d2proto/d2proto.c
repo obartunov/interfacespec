@@ -29,6 +29,7 @@
 #include "access/tableam_indexscan.h"
 #include "access/xact.h"
 #include "catalog/pg_type.h"
+#include "executor/instrument.h"
 #include "executor/spi.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
@@ -598,7 +599,9 @@ d2_run(PG_FUNCTION_ARGS)
  * sessions can act between two callbacks of an open scan.  Scans, pins,
  * relation references and the snapshot belong to the top transaction's
  * resource owner; observer state lives in TopTransactionContext.  The
- * observer is attached only while a step runs.
+ * observer is attached only while a step runs.  d2_step returns the step's
+ * events followed by {"buffers": n}, the shared buffers the step touched
+ * (coverage only: whether the AM read a page).
  */
 static Driver *sess;
 static bool sess_xact_cb_registered;
@@ -671,10 +674,14 @@ d2_step(PG_FUNCTION_ARGS)
 	const IndexAmRoutine *orig;
 	MemoryContext old;
 	ResourceOwner saveowner;
+	int64		bufs;
+	text	   *res;
+	StringInfoData out;
 
 	if (!sess)
 		elog(ERROR, "d2_step: no open session scan set");
 	from = events->len;
+	bufs = pgBufferUsage.shared_blks_hit + pgBufferUsage.shared_blks_read;
 	old = MemoryContextSwitchTo(TopTransactionContext);
 	saveowner = CurrentResourceOwner;
 	CurrentResourceOwner = TopTransactionResourceOwner;
@@ -691,7 +698,15 @@ d2_step(PG_FUNCTION_ARGS)
 		MemoryContextSwitchTo(old);
 	}
 	PG_END_TRY();
-	PG_RETURN_TEXT_P(events_since(from));
+	bufs = pgBufferUsage.shared_blks_hit + pgBufferUsage.shared_blks_read - bufs;
+
+	/* the step's events, then the shared buffers it touched (coverage) */
+	res = events_since(from);
+	initStringInfo(&out);
+	appendBinaryStringInfo(&out, VARDATA_ANY(res), VARSIZE_ANY_EXHDR(res) - 1);
+	appendStringInfo(&out, "%s{\"buffers\":" INT64_FORMAT "}]",
+					 VARSIZE_ANY_EXHDR(res) > 2 ? "," : "", bufs);
+	PG_RETURN_TEXT_P(cstring_to_text_with_len(out.data, out.len));
 }
 
 PG_FUNCTION_INFO_V1(d2_close);

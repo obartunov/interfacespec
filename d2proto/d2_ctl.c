@@ -22,6 +22,13 @@
  *	                   see are skipped although they are still in the index
  *	                   (S6: an entry of a deleted row disappears from the
  *	                   scan without having been removed from the index)
+ *	  restore_shift_on_growth  if the index has grown since ammarkpos,
+ *	                   amrestrpos lands one entry past the mark: the next
+ *	                   forward entry is consumed (S5-concurrent: restore to
+ *	                   the wrong place)
+ *	  restore_lost_on_growth  if the index has grown since ammarkpos,
+ *	                   amrestrpos restarts the scan instead (S5-concurrent:
+ *	                   the mark is lost)
  *
  *	  Above the observer (a faulty caller):
  *	  caller_more_keys amrescan is called with one key more than
@@ -44,7 +51,8 @@
 enum
 {
 	F_NONE, F_ITUP_SHARED, F_DIR_FROM_START, F_RESTORE_ONCE, F_CALLER_MORE_KEYS,
-	F_SKIP_AFTER_GROWTH, F_REPEAT_AFTER_GROWTH, F_SKIP_INVISIBLE
+	F_SKIP_AFTER_GROWTH, F_REPEAT_AFTER_GROWTH, F_SKIP_INVISIBLE,
+	F_RESTORE_SHIFT_ON_GROWTH, F_RESTORE_LOST_ON_GROWTH
 };
 
 static const struct config_enum_entry fault_options[] = {
@@ -56,6 +64,8 @@ static const struct config_enum_entry fault_options[] = {
 	{"skip_after_growth", F_SKIP_AFTER_GROWTH, false},
 	{"repeat_after_growth", F_REPEAT_AFTER_GROWTH, false},
 	{"skip_invisible", F_SKIP_INVISIBLE, false},
+	{"restore_shift_on_growth", F_RESTORE_SHIFT_ON_GROWTH, false},
+	{"restore_lost_on_growth", F_RESTORE_LOST_ON_GROWTH, false},
 	{NULL, 0, false}
 };
 
@@ -73,6 +83,7 @@ typedef struct CtlScan
 	int			restores;		/* since last mark */
 	BlockNumber nblocks;		/* index size at amrescan */
 	bool		fired;			/* growth fault applied (once per rescan) */
+	BlockNumber mark_nblocks;	/* index size at ammarkpos */
 	ItemPointerData last;		/* previous returned TID */
 	bool		haslast;
 } CtlScan;
@@ -112,6 +123,7 @@ cscan(IndexScanDesc scan)
 	cscans[ncscans].restores = 0;
 	cscans[ncscans].nblocks = InvalidBlockNumber;
 	cscans[ncscans].fired = false;
+	cscans[ncscans].mark_nblocks = InvalidBlockNumber;
 	cscans[ncscans].haslast = false;
 	return &cscans[ncscans++];
 }
@@ -125,6 +137,7 @@ ctl_rescan(IndexScanDesc scan, ScanKey keys, int nkeys, ScanKey orderbys, int no
 	c->nblocks = RelationGetNumberOfBlocks(scan->indexRelation);
 	c->fired = false;
 	c->haslast = false;
+	c->mark_nblocks = InvalidBlockNumber;
 	real->amrescan(scan, keys, nkeys, orderbys, norderbys);
 }
 
@@ -199,6 +212,7 @@ static void
 ctl_markpos(IndexScanDesc scan)
 {
 	cscan(scan)->restores = 0;
+	cscan(scan)->mark_nblocks = RelationGetNumberOfBlocks(scan->indexRelation);
 	real->ammarkpos(scan);
 }
 
@@ -206,10 +220,28 @@ static void
 ctl_restrpos(IndexScanDesc scan)
 {
 	CtlScan    *c = cscan(scan);
+	bool		grown;
 
 	if (fault == F_RESTORE_ONCE && c->restores++ > 0)
 		return;
+	grown = c->mark_nblocks != InvalidBlockNumber &&
+		RelationGetNumberOfBlocks(scan->indexRelation) > c->mark_nblocks;
+	if (fault == F_RESTORE_LOST_ON_GROWTH && grown)
+	{
+		/* restart with the keys the AM already holds */
+		ScanKey		k = NULL;
+
+		if (scan->numberOfKeys > 0)
+		{
+			k = palloc_array(ScanKeyData, scan->numberOfKeys);
+			memcpy(k, scan->keyData, scan->numberOfKeys * sizeof(ScanKeyData));
+		}
+		real->amrescan(scan, k, scan->numberOfKeys, NULL, 0);
+		return;
+	}
 	real->amrestrpos(scan);
+	if (fault == F_RESTORE_SHIFT_ON_GROWTH && grown)
+		(void) real->amgettuple(scan, ForwardScanDirection);
 }
 
 const IndexAmRoutine *

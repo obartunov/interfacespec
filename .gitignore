@@ -9,3 +9,4 @@ tmp_check/
 __pycache__/
 check.log
 check_d3.log
+check_d3_s5.log
