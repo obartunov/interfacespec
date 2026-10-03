@@ -680,6 +680,153 @@ def run_history(proto, cap, a, b, subj, opr, val, prologue, body, stats, cov):
     return None
 
 
+def run_executor_subject(cspec, subj, fault, profile):
+    """V5: A2 is the executor's scan of the index (a cursor), B acts between
+    its FETCHes; the outcome is compared with the same query by a
+    sequential scan under A2's snapshot (concurrencyspec 'executor')."""
+    gen = cspec['generation'][profile]
+    a = connect()
+    a.autocommit = True
+    b = B()
+    sa = a.cursor()
+    q = subj['query']
+
+    def settings(extra=None):
+        for k, v in dict(subj.get('settings', {}), **(extra or {})).items():
+            sa.execute(f"SET LOCAL {k} TO {engine.lit(str(v))}")
+
+    # base: nothing deleted, nothing concurrent
+    for stmt in subj['reset']:
+        b.run(stmt)
+    sa.execute("BEGIN ISOLATION LEVEL REPEATABLE READ")
+    settings()
+    sa.execute("EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF) " + q)
+    plan = [r[0] for r in sa.fetchall()]
+    sa.execute("COMMIT")
+    hf = [l.split(':')[1].strip() for l in plan if 'Heap Fetches:' in l]
+    out = [f"== {subj['name']}",
+           f"   plan: {subj['plan']}: {'yes' if any(subj['plan'] in l for l in plan) else 'NO'}"
+           + (f"; heap fetches with nothing deleted: {hf[0]}" if hf else '')]
+
+    prologue = [parse_op(i) for i in gen['prologue']]
+    epilogue = [parse_op(i) for i in gen['epilogue']]
+    alphabet = [parse_op(i) for i in gen['alphabet']]
+
+    def within(bd):
+        return all(sum(1 for i in bd if alphabet[i][0] + '.' + alphabet[i][1] == k
+                       or alphabet[i][0] == k) <= v for k, v in gen['limits'].items())
+    bodies = [bd for bd in itertools.product(range(len(alphabet)), repeat=gen['depth']) if within(bd)]
+    stats = {'histories': len(bodies), 'planned': 0, 'reuse': 0, 'fail': 0,
+             'completed': 0, 'blocked': 0, 'b_waiting': 0, 'extra': 0, 'missing': 0,
+             'extra_not_deleted': 0, 'extra_reused_tid': 0}
+    worst = None
+    for bd in bodies:
+        res = run_executor_history(a, sa, b, subj, fault, settings,
+                                   prologue + [alphabet[i] for i in bd] + epilogue, stats)
+        if res and (worst is None or res[0] < worst[0]):
+            worst = res
+    out.append(f"   {stats['histories']} histories; planned as {subj['plan'].split(' using')[0]}: {stats['planned']}; "
+               f"an insert reused the heap TID of a deleted row: {stats['reuse']}")
+    if worst is None:
+        out.append("     result: pass")
+    else:
+        out.append(f"     result: FAIL ({stats['fail']} histories): {gen['contract']}")
+        out += worst[1]
+    EVIDENCE.append(f"{subj['name']} [{fault}]: remove completed at once {stats['completed']}, blocked by A2 "
+                    f"{stats['blocked']} (B operations not run meanwhile {stats['b_waiting']}); rows A2 returned that "
+                    f"its snapshot cannot see {stats['extra']} (not rows deleted before A2 began: {stats['extra_not_deleted']}; "
+                    f"returned after an insert reused their heap TID: {stats['extra_reused_tid']}), rows missing {stats['missing']}")
+    b.mon.close()
+    b.conn.close()
+    a.close()
+    return out
+
+
+def run_executor_history(a, sa, b, subj, fault, settings, steps, stats):
+    q = subj['query']
+    for stmt in subj['reset']:
+        b.run(stmt)
+    deleted = b.run(subj['delete'])
+    del_tids = {r[0] for r in deleted}
+    del_ids = {r[1] for r in deleted}
+    b.was_blocked = False
+    sa.execute("BEGIN ISOLATION LEVEL REPEATABLE READ")
+    settings()
+    sa.execute("SET LOCAL d2_ctl.fault TO %s", (fault,))
+    if fault != 'none':
+        sa.execute("SELECT d2_ctl_install(%s)", (subj['index'],))
+    sa.execute("EXPLAIN (COSTS OFF) " + q)
+    if any(subj['plan'] in r[0] for r in sa.fetchall()):
+        stats['planned'] += 1
+    sa.execute("DECLARE a2 NO SCROLL CURSOR FOR " + q)
+    rows = []
+    lines = ['     history:']
+    nins = 0
+    reused_any = False
+    reused_ids = set()
+    returned_after_reuse = []          # rows A2 returned after some insert reused a TID
+    id_of = {r[0]: r[1] for r in deleted}
+    for actor, name, arg, _ in steps:
+        if actor == 'A2':
+            sa.execute(f"FETCH {'ALL' if arg == 'all' else int(arg)} FROM a2")
+            got = sa.fetchall()
+            rows += got
+            if reused_ids:
+                returned_after_reuse += got
+            lines.append(f"       A2.fetch({arg}) -> {len(got)} rows")
+            continue
+        if b.running:
+            lines.append(f"       B.{name} (not run: B still waits for A2)")
+            stats['b_waiting'] += 1
+            continue
+        if name == 'remove':
+            state, ev_ = b.start(subj['remove'])
+            stats[state] += 1
+            lines.append(f"       B.remove -> {state}" + (f" ({ev_})" if ev_ else ""))
+        else:
+            nins += 1
+            new = b.run(subj['insert'].replace('{n}', str(nins)))
+            reused = {r[0] for r in new} & del_tids
+            reused_any |= bool(reused)
+            reused_ids |= {id_of[t] for t in reused}
+            lines.append(f"       B.insert -> {len(new)} rows; heap TIDs of deleted rows reused: {len(reused)}")
+    sa.execute("CLOSE a2")
+    settings({'enable_seqscan': 'on', 'enable_indexscan': 'off', 'enable_indexonlyscan': 'off',
+              'enable_bitmapscan': 'off'})
+    sa.execute(q)
+    ref = sa.fetchall()
+    sa.execute("COMMIT")
+    b.finish()
+    stats['reuse'] += reused_any
+    if subj.get('ordered'):
+        same = rows == ref
+    else:
+        same = sorted(map(repr, rows)) == sorted(map(repr, ref))
+    if same:
+        return None
+    stats['fail'] += 1
+    from collections import Counter
+    extra = Counter(rows) - Counter(ref)
+    missing = Counter(ref) - Counter(rows)
+    stats['extra'] += sum(extra.values())
+    stats['missing'] += sum(missing.values())
+    ids = sorted(r[subj['id_column']] for r in extra)
+    stats['extra_not_deleted'] += sum(1 for i in ids if i not in del_ids)
+    late = {r[subj['id_column']] for r in returned_after_reuse}
+    stats['extra_reused_tid'] += sum(1 for i in ids if i in reused_ids and i in late)
+    lines.append(f"     reference: {len(ref)} rows; A2 returned {len(rows)}")
+    if extra:
+        lines.append(f"     {sum(extra.values())} rows A2's snapshot cannot see, "
+                     f"{sum(1 for i in ids if i in del_ids)} of them deleted before A2 began (ids {', '.join(map(str, ids[:5]))}"
+                     + (', ...' if len(ids) > 5 else '') + ")")
+    if missing:
+        lines.append(f"     {sum(missing.values())} rows of the reference missing")
+    if not extra and not missing:
+        first = next(i for i, (x, y) in enumerate(zip(rows, ref)) if x != y)
+        lines.append(f"     same rows, order differs from row {first}")
+    return (len(steps), lines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('protocolspec')
@@ -701,6 +848,13 @@ def main():
     print(f"fault: {o.fault}")
     for subj in yaml.safe_load(open(o.subjects)):
         if o.only and subj['name'] != o.only:
+            continue
+        if 'A2' in ' '.join(cspec['generation'][o.profile]['prologue']):
+            res = run_executor_subject(cspec, subj, o.fault, o.profile)
+            if subj.get('evidence'):     # reported, not compared
+                EVIDENCE.append('\n'.join(res))
+                continue
+            print('\n'.join(res))
             continue
         print('\n'.join(run_subject(pspec, cspec, subj, o.fault, o.depth or subj['depth'], o.profile)))
     if o.evidence:

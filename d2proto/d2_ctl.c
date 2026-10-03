@@ -29,6 +29,12 @@
  *	  restore_lost_on_growth  if the index has grown since ammarkpos,
  *	                   amrestrpos restarts the scan instead (S5-concurrent:
  *	                   the mark is lost)
+ *	  collect_all      the first amgettuple after amrescan reads every
+ *	                   matching entry (TID, returned data, recheck) and
+ *	                   the scan then returns them from memory: the AM holds
+ *	                   nothing in the index while returning them, as an AM
+ *	                   without the scan/VACUUM interlock would (V5: forward
+ *	                   scans only)
  *
  *	  Above the observer (a faulty caller):
  *	  caller_more_keys amrescan is called with one key more than
@@ -39,12 +45,18 @@
  */
 #include "postgres.h"
 
+#include "access/genam.h"
+#include "access/htup_details.h"
+#include "access/itup.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
+#include "access/xact.h"
+#include "fmgr.h"
 #include "storage/bufmgr.h"
-#include "utils/rel.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
+#include "utils/resowner.h"
 
 #include "d2proto.h"
 
@@ -52,7 +64,7 @@ enum
 {
 	F_NONE, F_ITUP_SHARED, F_DIR_FROM_START, F_RESTORE_ONCE, F_CALLER_MORE_KEYS,
 	F_SKIP_AFTER_GROWTH, F_REPEAT_AFTER_GROWTH, F_SKIP_INVISIBLE,
-	F_RESTORE_SHIFT_ON_GROWTH, F_RESTORE_LOST_ON_GROWTH
+	F_RESTORE_SHIFT_ON_GROWTH, F_RESTORE_LOST_ON_GROWTH, F_COLLECT_ALL
 };
 
 static const struct config_enum_entry fault_options[] = {
@@ -66,6 +78,7 @@ static const struct config_enum_entry fault_options[] = {
 	{"skip_invisible", F_SKIP_INVISIBLE, false},
 	{"restore_shift_on_growth", F_RESTORE_SHIFT_ON_GROWTH, false},
 	{"restore_lost_on_growth", F_RESTORE_LOST_ON_GROWTH, false},
+	{"collect_all", F_COLLECT_ALL, false},
 	{NULL, 0, false}
 };
 
@@ -86,6 +99,14 @@ typedef struct CtlScan
 	BlockNumber mark_nblocks;	/* index size at ammarkpos */
 	ItemPointerData last;		/* previous returned TID */
 	bool		haslast;
+	/* collect_all: what the first amgettuple read */
+	bool		collected;
+	int			ncoll;
+	int			next;
+	ItemPointerData *tids;
+	IndexTuple *itups;
+	HeapTuple  *hitups;
+	bool	   *rechecks;
 } CtlScan;
 
 static CtlScan cscans[16];
@@ -125,6 +146,7 @@ cscan(IndexScanDesc scan)
 	cscans[ncscans].fired = false;
 	cscans[ncscans].mark_nblocks = InvalidBlockNumber;
 	cscans[ncscans].haslast = false;
+	cscans[ncscans].collected = false;
 	return &cscans[ncscans++];
 }
 
@@ -138,7 +160,56 @@ ctl_rescan(IndexScanDesc scan, ScanKey keys, int nkeys, ScanKey orderbys, int no
 	c->fired = false;
 	c->haslast = false;
 	c->mark_nblocks = InvalidBlockNumber;
+	c->collected = false;
 	real->amrescan(scan, keys, nkeys, orderbys, norderbys);
+}
+
+/* collect_all: read everything at the first call, then return from memory */
+static bool
+collect_gettuple(IndexScanDesc scan, CtlScan *c, ScanDirection dir)
+{
+	int			i;
+
+	if (ScanDirectionIsBackward(dir))
+		elog(ERROR, "d2_ctl: collect_all supports forward scans only");
+	if (!c->collected)
+	{
+		MemoryContext old = MemoryContextSwitchTo(TopTransactionContext);
+		int			cap = 64;
+
+		c->ncoll = 0;
+		c->next = 0;
+		c->tids = palloc_array(ItemPointerData, cap);
+		c->itups = palloc_array(IndexTuple, cap);
+		c->hitups = palloc_array(HeapTuple, cap);
+		c->rechecks = palloc_array(bool, cap);
+		while (real->amgettuple(scan, dir))
+		{
+			if (c->ncoll == cap)
+			{
+				cap *= 2;
+				c->tids = repalloc_array(c->tids, ItemPointerData, cap);
+				c->itups = repalloc_array(c->itups, IndexTuple, cap);
+				c->hitups = repalloc_array(c->hitups, HeapTuple, cap);
+				c->rechecks = repalloc_array(c->rechecks, bool, cap);
+			}
+			c->tids[c->ncoll] = scan->xs_heaptid;
+			c->itups[c->ncoll] = scan->xs_itup ? CopyIndexTuple(scan->xs_itup) : NULL;
+			c->hitups[c->ncoll] = scan->xs_hitup ? heap_copytuple(scan->xs_hitup) : NULL;
+			c->rechecks[c->ncoll] = scan->xs_recheck;
+			c->ncoll++;
+		}
+		MemoryContextSwitchTo(old);
+		c->collected = true;
+	}
+	if (c->next >= c->ncoll)
+		return false;
+	i = c->next++;
+	scan->xs_heaptid = c->tids[i];
+	scan->xs_itup = c->itups[i];
+	scan->xs_hitup = c->hitups[i];
+	scan->xs_recheck = c->rechecks[i];
+	return true;
 }
 
 static bool
@@ -147,6 +218,9 @@ ctl_gettuple(IndexScanDesc scan, ScanDirection dir)
 	CtlScan    *c = cscan(scan);
 	int			d = ScanDirectionIsBackward(dir) ? -1 : 1;
 	bool		ret;
+
+	if (fault == F_COLLECT_ALL)
+		return collect_gettuple(scan, c, dir);
 
 	if (fault == F_DIR_FROM_START && c->lastdir != 0 && c->lastdir != d)
 	{
@@ -286,4 +360,62 @@ d2ctl_caller_layer(const IndexAmRoutine *observer)
 	caller_layer = *observer;
 	caller_layer.amrescan = caller_rescan;
 	return &caller_layer;
+}
+
+/*
+ * ---- d2_ctl_install(index) ----
+ * Put the AM control layer (d2_ctl.fault) in front of the index's routine
+ * for the rest of the transaction, so that the executor's own scans of it
+ * (a cursor) go through the layer.  No observer.  The index stays open
+ * until the transaction ends, when the routine is put back.
+ */
+static Relation inst_rel;
+static const IndexAmRoutine *inst_orig;
+static bool inst_cb_registered;
+
+static void
+inst_xact_cb(XactEvent event, void *arg)
+{
+	if (!inst_rel)
+		return;
+	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
+		event == XACT_EVENT_PRE_PREPARE)
+	{
+		inst_rel->rd_indam = inst_orig;
+		index_close(inst_rel, NoLock);
+		inst_rel = NULL;
+		d2ctl_reset();
+	}
+	else if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT)
+	{
+		/* the resource owner drops the reference */
+		inst_rel->rd_indam = inst_orig;
+		inst_rel = NULL;
+		d2ctl_reset();
+	}
+}
+
+PG_FUNCTION_INFO_V1(d2_ctl_install);
+Datum
+d2_ctl_install(PG_FUNCTION_ARGS)
+{
+	ResourceOwner saveowner;
+
+	if (!IsTransactionBlock())
+		elog(ERROR, "d2_ctl_install: must run inside a transaction block");
+	if (inst_rel)
+		elog(ERROR, "d2_ctl_install: a layer is already installed");
+	if (!inst_cb_registered)
+	{
+		RegisterXactCallback(inst_xact_cb, NULL);
+		inst_cb_registered = true;
+	}
+	saveowner = CurrentResourceOwner;
+	CurrentResourceOwner = TopTransactionResourceOwner;
+	inst_rel = index_open(PG_GETARG_OID(0), AccessShareLock);
+	CurrentResourceOwner = saveowner;
+	inst_orig = inst_rel->rd_indam;
+	d2ctl_reset();
+	inst_rel->rd_indam = d2ctl_am_layer(inst_orig);
+	PG_RETURN_VOID();
 }

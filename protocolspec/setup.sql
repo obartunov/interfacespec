@@ -27,3 +27,8 @@ CREATE TABLE c_ht (k int4) WITH (autovacuum_enabled = off);
 CREATE INDEX c_ht_k ON c_ht USING hash (k);
 CREATE TABLE c_gt (p point) WITH (autovacuum_enabled = off);
 CREATE INDEX c_gt_p ON c_gt USING gist (p) WITH (fillfactor = 10);
+-- D3 (V5): rows with an immutable logical id; reset by each history
+CREATE TABLE v_bt (id int8, k int4, pad text) WITH (fillfactor = 10, autovacuum_enabled = off);
+CREATE INDEX v_bt_k ON v_bt (k) INCLUDE (id);
+CREATE TABLE v_gt (id int8, p point, pad text) WITH (fillfactor = 10, autovacuum_enabled = off);
+CREATE INDEX v_gt_p ON v_gt USING gist (p) INCLUDE (id);

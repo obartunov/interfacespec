@@ -22,3 +22,7 @@ CREATE FUNCTION d2_step(step text) RETURNS json
   AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
 CREATE FUNCTION d2_close() RETURNS json
   AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
+-- put the control layer (d2_ctl.fault) in front of idx for the rest of
+-- the transaction (the executor's own scans), without the observer
+CREATE FUNCTION d2_ctl_install(idx regclass) RETURNS void
+  AS 'MODULE_PATHNAME' LANGUAGE C STRICT;
