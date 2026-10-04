@@ -1,0 +1,3 @@
+fault: none
+== gist (p) INCLUDE (id), index-only scan
+   known violation (GiST index-only scan returns rows its snapshot cannot see after a concurrent VACUUM (BT-INV R9)): reproduced

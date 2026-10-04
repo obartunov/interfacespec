@@ -74,7 +74,10 @@ rescan(given), get(forward)`, тело глубины 8 из `A.get(forward)`,
 `engine.Protocol`; профиль выбирается `--profile`.  Субъект без
 `ammarkpos`/`amrestrpos` (из caps) — n/a; в движке нет ветвлений по AM.
 
-Покрытие (`expected/d3s5_none.out`, детерминировано; plain / index-only):
+Покрытие (`results/d3_s5_evidence.txt`, один прогон; plain / index-only).
+В сравниваемом выводе — только то, что все 18 обязательных классов
+(`coverage` профиля `s5_concurrent`) встретились; числа зависят от того, что
+VACUUM смог убрать:
 
 | что выполнено | plain | index-only |
 |---|---|---|
@@ -107,9 +110,10 @@ btree: S5-concurrent выполняется во всех 364 историях �
 n/a по caps.  Оба контроля пойманы.  Injection points не понадобились:
 все нужные истории — на границе callback'ов.
 
-Стенд `check_d3_s5.sh` (selftest + none + 2 контроля, ~1 мин 40 с)
-прогнан четыре раза (генерация expected + три прогона): сравниваемый
-вывод одинаков.
+Стенд `check_d3_s5.sh` (selftest + none + 2 контроля, ~1 мин 40 с).
+Сравниваемый вывод: вердикт и «N of 18 required classes present» по
+субъектам; контрпримеры — в evidence.  Прогнан три серии подряд и одну под
+периодическим чужим снимком: сравниваемый вывод одинаков.
 
 ## Controls
 

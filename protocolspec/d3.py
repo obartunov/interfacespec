@@ -462,14 +462,18 @@ def run_subject(pspec, cspec, subj, fault, depth, profile='s6'):
             worst = res
         if res and res[2] and (worst_blocked is None or res[0] < worst_blocked[0]):
             worst_blocked = res
-    out.append(f"   depth {depth}: {stats['histories']} histories"
-               + (f"; BOUNDARY (heap TID reused by an insert): {stats['boundary']}" if stats['boundary'] else "")
-               + (f"; DOMAIN (removed marked entry returned again): {stats['domain']}" if stats['domain'] else ""))
-    if cov:
-        out.append("   coverage (histories):")
-        out += [f"     {k}: {cov[k]}" for k in sorted(cov) if not k.startswith('~')]
-        EVIDENCE.append(f"{subj['name']} [{fault}] {gen['contract']} coverage depending on scheduling: "
-                        + '; '.join(f"{k[1:]}: {cov[k]}" for k in sorted(cov) if k.startswith('~')))
+    # compared output: verdicts and the required coverage classes; counts,
+    # BOUNDARY/DOMAIN numbers and counterexamples depend on what the server
+    # could clean up (scheduling, other sessions' xmin): evidence only
+    tag = f"{subj['name']} [{fault}] {gen['contract']}"
+    out.append(f"   depth {depth}: {stats['histories']} histories")
+    EVIDENCE.append(f"{tag}: BOUNDARY (heap TID reused by an insert) {stats['boundary']}; "
+                    f"DOMAIN (removed marked entry returned again) {stats['domain']}")
+    if 'coverage' in gen:
+        missing = [k for k in gen['coverage'] if not cov.get(k)]
+        out.append(f"   coverage: {len(gen['coverage']) - len(missing)} of {len(gen['coverage'])} required classes present"
+                   + (": missing " + '; '.join(missing) if missing else ''))
+        EVIDENCE.append(f"{tag} coverage (histories): " + '; '.join(f"{k.lstrip('~')}: {cov[k]}" for k in sorted(cov)))
     ev = (f"{subj['name']} [{fault}]: {stats['gets']} amgettuple, cut by obligation/domain {stats['cut']}; "
           f"inserted entries {stats['inserted']}, returned {stats['may']}; remove completed at once {stats['completed']}, "
           f"blocked by A {stats['blocked']} (histories where it waited {stats['blocked_histories']}; B operations not run "
@@ -480,10 +484,10 @@ def run_subject(pspec, cspec, subj, fault, depth, profile='s6'):
         out.append("     result: pass")
     else:
         out.append(f"     result: FAIL {gen['contract']}")
-        out += worst[1]
+        EVIDENCE.append(f"{tag} minimal failing history:\n" + '\n'.join(worst[1]))
         if worst_blocked and worst_blocked is not worst:
-            out.append("     minimal failing history in which the remove was blocked by A:")
-            out += worst_blocked[1][1:]
+            EVIDENCE.append(f"{tag} minimal failing history in which the remove was blocked by A:\n"
+                            + '\n'.join(worst_blocked[1][1:]))
     b.mon.close()
     b.conn.close()
     a.close()
@@ -704,9 +708,10 @@ def run_executor_subject(cspec, subj, fault, profile):
     plan = [r[0] for r in sa.fetchall()]
     sa.execute("COMMIT")
     hf = [l.split(':')[1].strip() for l in plan if 'Heap Fetches:' in l]
-    out = [f"== {subj['name']}",
-           f"   plan: {subj['plan']}: {'yes' if any(subj['plan'] in l for l in plan) else 'NO'}"
-           + (f"; heap fetches with nothing deleted: {hf[0]}" if hf else '')]
+    out = [f"== {subj['name']}"]
+    tag = f"{subj['name']} [{fault}]"
+    if hf:
+        EVIDENCE.append(f"{tag}: heap fetches with nothing deleted: {hf[0]}")
 
     prologue = [parse_op(i) for i in gen['prologue']]
     epilogue = [parse_op(i) for i in gen['epilogue']]
@@ -718,21 +723,39 @@ def run_executor_subject(cspec, subj, fault, profile):
     bodies = [bd for bd in itertools.product(range(len(alphabet)), repeat=gen['depth']) if within(bd)]
     stats = {'histories': len(bodies), 'planned': 0, 'reuse': 0, 'fail': 0,
              'completed': 0, 'blocked': 0, 'b_waiting': 0, 'extra': 0, 'missing': 0,
-             'extra_not_deleted': 0, 'extra_reused_tid': 0}
+             'extra_not_deleted': 0, 'extra_reused_tid': 0,
+             'cleaned': 0, 'fail_cleaned': 0, 'fail_not_cleaned': 0}
     worst = None
     for bd in bodies:
         res = run_executor_history(a, sa, b, subj, fault, settings,
                                    prologue + [alphabet[i] for i in bd] + epilogue, stats)
         if res and (worst is None or res[0] < worst[0]):
             worst = res
-    out.append(f"   {stats['histories']} histories; planned as {subj['plan'].split(' using')[0]}: {stats['planned']}; "
-               f"an insert reused the heap TID of a deleted row: {stats['reuse']}")
+    # compared output: invariants only.  A history is eligible when B's
+    # remove completed and the index no longer holds the deleted rows'
+    # entries (observed by a fresh scan): whether that happens depends on
+    # other sessions' xmin, so how many there were is evidence.
+    out.append(f"   {stats['histories']} histories; planned as {subj['plan']}: "
+               f"{'every history' if stats['planned'] == stats['histories'] else 'NOT every history'}; "
+               f"histories with an observed cleanup: {'yes' if stats['cleaned'] else 'none'}")
     if worst is None:
+        verdict = "pass"
         out.append("     result: pass")
     else:
-        out.append(f"     result: FAIL ({stats['fail']} histories): {gen['contract']}")
-        out += worst[1]
-    EVIDENCE.append(f"{subj['name']} [{fault}]: remove completed at once {stats['completed']}, blocked by A2 "
+        verdict = "FAIL"
+        out.append(f"     result: FAIL: {gen['contract']}; every history with an observed cleanup fails: "
+                   f"{'yes' if stats['fail_cleaned'] == stats['cleaned'] else 'no'}; failures without one: "
+                   f"{'yes' if stats['fail_not_cleaned'] else 'none'}")
+        EVIDENCE.append(f"{tag} minimal failing history:\n" + '\n'.join(worst[1]))
+    if subj.get('known_violation'):
+        out[1:] = [f"   known violation ({subj['known_violation']}): "
+                   + ("reproduced" if verdict == "FAIL" and stats['fail_cleaned']
+                      else "NOT reproduced; the expectation may be obsolete")]
+    EVIDENCE.append(f"{tag}: {stats['histories']} histories, planned as {subj['plan']} {stats['planned']}, "
+                    f"with an observed cleanup {stats['cleaned']}, failing {stats['fail']} "
+                    f"(with cleanup {stats['fail_cleaned']}, without {stats['fail_not_cleaned']}); an insert "
+                    f"reused the heap TID of a deleted row {stats['reuse']}")
+    EVIDENCE.append(f"{tag}: remove completed at once {stats['completed']}, blocked by A2 "
                     f"{stats['blocked']} (B operations not run meanwhile {stats['b_waiting']}); rows A2 returned that "
                     f"its snapshot cannot see {stats['extra']} (not rows deleted before A2 began: {stats['extra_not_deleted']}; "
                     f"returned after an insert reused their heap TID: {stats['extra_reused_tid']}), rows missing {stats['missing']}")
@@ -764,6 +787,7 @@ def run_executor_history(a, sa, b, subj, fault, settings, steps, stats):
     nins = 0
     reused_any = False
     reused_ids = set()
+    cleaned = False
     returned_after_reuse = []          # rows A2 returned after some insert reused a TID
     id_of = {r[0]: r[1] for r in deleted}
     for actor, name, arg, _ in steps:
@@ -782,6 +806,11 @@ def run_executor_history(a, sa, b, subj, fault, settings, steps, stats):
         if name == 'remove':
             state, ev_ = b.start(subj['remove'])
             stats[state] += 1
+            if state == 'completed':
+                left = b.present(subj['index'], subj['opr'], subj['val'],
+                                 b.run(f"SELECT count(*) FROM {subj['table']}")[0][0] + len(del_tids)) & del_tids
+                cleaned |= not left
+                lines.append(f"       (deleted rows' entries left in the index: {len(left)})")
             lines.append(f"       B.remove -> {state}" + (f" ({ev_})" if ev_ else ""))
         else:
             nins += 1
@@ -798,6 +827,7 @@ def run_executor_history(a, sa, b, subj, fault, settings, steps, stats):
     sa.execute("COMMIT")
     b.finish()
     stats['reuse'] += reused_any
+    stats['cleaned'] += cleaned
     if subj.get('ordered'):
         same = rows == ref
     else:
@@ -805,6 +835,7 @@ def run_executor_history(a, sa, b, subj, fault, settings, steps, stats):
     if same:
         return None
     stats['fail'] += 1
+    stats['fail_cleaned' if cleaned else 'fail_not_cleaned'] += 1
     from collections import Counter
     extra = Counter(rows) - Counter(ref)
     missing = Counter(ref) - Counter(rows)
@@ -851,9 +882,6 @@ def main():
             continue
         if 'A2' in ' '.join(cspec['generation'][o.profile]['prologue']):
             res = run_executor_subject(cspec, subj, o.fault, o.profile)
-            if subj.get('evidence'):     # reported, not compared
-                EVIDENCE.append('\n'.join(res))
-                continue
             print('\n'.join(res))
             continue
         print('\n'.join(run_subject(pspec, cspec, subj, o.fault, o.depth or subj['depth'], o.profile)))

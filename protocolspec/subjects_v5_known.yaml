@@ -1,0 +1,22 @@
+# D3 (V5) known violations: a real AM fails the snapshot oracle.  The
+# regression checks that the violation still reproduces; when it no longer
+# does (fixed upstream), the expectation is to be removed.  Fields as in
+# subjects_v5.yaml.
+- name: gist (p) INCLUDE (id), index-only scan
+  known_violation: GiST index-only scan returns rows its snapshot cannot see after a concurrent VACUUM (BT-INV R9)
+  index: v_gt_p
+  table: v_gt
+  opr: '<@(point,box)'
+  val: '((0,0),(49,40))'
+  query: "SELECT p, id FROM v_gt WHERE p <@ box '((0,0),(49,40))'"
+  ordered: false
+  id_column: 1
+  plan: Index Only Scan using v_gt_p
+  settings: {enable_seqscan: 'off', enable_bitmapscan: 'off'}
+  reset:
+    - "TRUNCATE v_gt"
+    - "INSERT INTO v_gt SELECT i, point(i % 50, i / 50), repeat('x', 100) FROM generate_series(1, 2000) i"
+    - "VACUUM v_gt"
+  delete: "DELETE FROM v_gt WHERE id % 3 = 0 RETURNING ctid::text, id"
+  insert: "INSERT INTO v_gt SELECT 100000 * {n} + g, point(g % 50, g / 50), repeat('y', 100) FROM generate_series(1, 300) g RETURNING ctid::text, id"
+  remove: "VACUUM (INDEX_CLEANUP ON) v_gt"

@@ -1,68 +1,12 @@
 fault: restore_shift_on_growth
 == btree text, k > 'k03'  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
    depth 8: 364 histories
-   coverage (histories):
-     B between mark and restore, then an entry of another leaf returned after restore: 55
-     B between mark and restore, then an outcome checked after restore: 48
-     B.insert between mark and restore: 56
-     B.remove between mark and restore: 56
-     entry of another leaf than the marked one returned after mark, before restore: 210
-     entry of another leaf than the marked one returned after restore: 213
-     insert between mark and restore: entry after the mark: 55
-     insert between mark and restore: entry before the mark: 35
-     inserted entry returned after restore: 49
-     mark run, marked entry deleted before A: 45
-     mark run, marked entry inserted (gap): 8
-     mark run, marked entry stable: 311
-     outcome checked after restore: 239
-     remove between mark and restore, deleted entry before the mark: 4
-     remove between mark and restore, deleted entry later: 55
-     remove between mark and restore, deleted entry right after the mark: 11
-     remove between mark and restore, deleted entry the marked entry: 6
-     restore run: 364
+   coverage: 18 of 18 required classes present
      result: FAIL S5-concurrent
-     history (state before -> observed -> state after):
-       A.begin
-       A.rescan(given)
-       A.get(forward)     [phase=ready] -> (0,3)  [phase=ready pos=0]
-       A.mark             [phase=ready pos=0]  [phase=ready pos=0 mark=0]
-       B.insert -> 3 entries
-       A.restore          [phase=ready pos=0 mark=0]  [phase=ready pos=0 mark=0]
-       A.get(forward)     [phase=ready pos=0 mark=0] -> (1,2)  []
-     reference: 10 entries; deleted before A: 2; inserted: 3
-     expected (1,1), observed (1,2)
 == btree text, k > 'k03', index-only (the scan keeps its leaf pin)  caps: amcanbackward amcanorder amcanreturn amgettuple ammarkpos amoptionalkey amrestrpos
    depth 8: 364 histories
-   coverage (histories):
-     B between mark and restore, then an entry of another leaf returned after restore: 55
-     B between mark and restore, then an outcome checked after restore: 48
-     B.insert between mark and restore: 56
-     B.remove between mark and restore: 56
-     entry of another leaf than the marked one returned after mark, before restore: 208
-     entry of another leaf than the marked one returned after restore: 211
-     insert between mark and restore: entry after the mark: 55
-     insert between mark and restore: entry before the mark: 35
-     inserted entry returned after restore: 49
-     mark run, marked entry deleted before A: 51
-     mark run, marked entry inserted (gap): 8
-     mark run, marked entry stable: 305
-     outcome checked after restore: 239
-     remove between mark and restore, deleted entry before the mark: 4
-     remove between mark and restore, deleted entry later: 55
-     remove between mark and restore, deleted entry right after the mark: 11
-     remove between mark and restore, deleted entry the marked entry: 6
-     restore run: 364
+   coverage: 18 of 18 required classes present
      result: FAIL S5-concurrent
-     history (state before -> observed -> state after):
-       A.begin
-       A.rescan(given)
-       A.get(forward)     [phase=ready] -> (0,3)  [phase=ready pos=0]
-       A.mark             [phase=ready pos=0]  [phase=ready pos=0 mark=0]
-       B.insert -> 3 entries
-       A.restore          [phase=ready pos=0 mark=0]  [phase=ready pos=0 mark=0]
-       A.get(forward)     [phase=ready pos=0 mark=0] -> (1,2)  []
-     reference: 10 entries; deleted before A: 2; inserted: 3
-     expected (1,1), observed (1,2)
 == hash int4, k = 2  caps: amcanbackward amgettuple
    S5-concurrent: n/a (no mark, restore)
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey

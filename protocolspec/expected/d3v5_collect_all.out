@@ -1,17 +1,7 @@
 fault: collect_all
 == btree (k) INCLUDE (id), index-only scan
-   plan: Index Only Scan using v_bt_k: yes; heap fetches with nothing deleted: 0
-   44 histories; planned as Index Only Scan: 44; an insert reused the heap TID of a deleted row: 6
-     result: FAIL (24 histories): index-only scan returns only rows its snapshot sees
-     history:
-       A2.fetch(1) -> 1 rows
-       A2.fetch(1) -> 1 rows
-       A2.fetch(1) -> 1 rows
-       B.remove -> completed
-       A2.fetch(all) -> 1996 rows
-     reference: 1334 rows; A2 returned 1999
-     665 rows A2's snapshot cannot see, 665 of them deleted before A2 began (ids 6, 9, 12, 15, 18, ...)
+   44 histories; planned as Index Only Scan using v_bt_k: every history; histories with an observed cleanup: yes
+     result: FAIL: index-only scan returns only rows its snapshot sees; every history with an observed cleanup fails: yes; failures without one: none
 == btree (k) INCLUDE (id), plain index scan (comparison)
-   plan: Index Scan using v_bt_k: yes
-   44 histories; planned as Index Scan: 44; an insert reused the heap TID of a deleted row: 6
+   44 histories; planned as Index Scan using v_bt_k: every history; histories with an observed cleanup: yes
      result: pass

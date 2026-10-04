@@ -163,6 +163,21 @@ S1 и S9 состоят из двух частей.  Внешняя проекц
   намеренный: amcheck знает про interval-индексы, построенные до 2023-11,
   с неверным флагом (verify_nbtree.c:336–347).
 
+- **R9 (V2/V3/V5, наблюдаемое поведение).**  Интерфейсная документация
+  неполна относительно index-only scan.  indexam.sgml:1157–1167 допускает
+  асинхронный скан (TID'ы собраны, pin снят) при MVCC-снимке;
+  :1036–1043 — VM «no concern of the access method's».  Для plain index scan
+  это верно: heap-визит отвергает строку снимком.  Для index-only — нет:
+  исполнитель не идёт в heap, если VACUUM успел убрать записи, сделать слоты
+  LP_UNUSED и поставить all-visible (heapam_indexscan.c:358–398,
+  vacuumlazy.c:2771–2849).  Нужен interlock между выдачей TID и проверкой
+  VM; btree даёт его pin'ом (V5, nbtree.c:403–421, README:461–472), GiST —
+  нет (gistget.c:546, gistvacuum.c:332).  На ad36e36 GiST index-only scan
+  выдаёт строки, удалённые до начала скана (D3-V5-RESULT.md,
+  `d3v5_gist_known_violation`).  Известно upstream (pgsql-hackers:
+  Geoghegan 2021-11-03; патч van de Meent 2025, не закоммичен).  В отличие
+  от R1–R8, меняет результат запроса.
+
 ## Покрытие прототипом
 
 Исполняемо сейчас: O1–O9 (кроме O8b), на значениях и в выбранной collation.

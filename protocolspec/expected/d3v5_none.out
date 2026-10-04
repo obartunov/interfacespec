@@ -1,9 +1,7 @@
 fault: none
 == btree (k) INCLUDE (id), index-only scan
-   plan: Index Only Scan using v_bt_k: yes; heap fetches with nothing deleted: 0
-   44 histories; planned as Index Only Scan: 44; an insert reused the heap TID of a deleted row: 0
+   44 histories; planned as Index Only Scan using v_bt_k: every history; histories with an observed cleanup: none
      result: pass
 == btree (k) INCLUDE (id), plain index scan (comparison)
-   plan: Index Scan using v_bt_k: yes
-   44 histories; planned as Index Scan: 44; an insert reused the heap TID of a deleted row: 6
+   44 histories; planned as Index Scan using v_bt_k: every history; histories with an observed cleanup: yes
      result: pass

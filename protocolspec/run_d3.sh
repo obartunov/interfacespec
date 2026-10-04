@@ -7,7 +7,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$here/results"
-psql -X -q -f "$here/setup.sql" postgres > /dev/null 2>&1
+psql -X -q -f "$here/setup.sql" postgres > /dev/null 2>&1 || { echo "FAILED setup (is the server running?)"; exit 1; }
 : > "$here/results/d3_evidence.txt"
 rc=0
 check() {

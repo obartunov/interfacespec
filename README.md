@@ -50,17 +50,23 @@ by layer; not every AM went through every layer.
 | D2 protocol (`protocolspec`) | S4, S5 (one session), S7, S8 | S4, S8 | S4 (forward only), S7, S8 | — (no `amgettuple`) |
 | D3 concurrency (`concurrencyspec`, `check_d3.sh`) | S6 (plain and index-only scan) | S6 | S6 | — |
 | D3 concurrent mark/restore (`check_d3_s5.sh`) | S5 + S6, plain and index-only | n/a | n/a | — |
+| D3 index-only scan vs VACUUM (`check_d3_v5.sh`) | snapshot visibility, index-only and plain | — | known violation (R9) | — |
 
 Each layer has control variants that break one property and must be caught;
 see the result documents.  Discrepancies between documentation and
-implementation found so far are recorded as R1–R8 (BT-INV.md, D0-RESULT.md,
-D2-INVENTORY.md, D2-RESULT.md); none of them changes a query result.
+implementation found so far are recorded as R1–R9 (BT-INV.md, D0-RESULT.md,
+D2-INVENTORY.md, D2-RESULT.md).  R1–R8 do not change a query result; R9
+does: a GiST index-only scan returns rows its snapshot cannot see after a
+concurrent VACUUM (D3-V5-RESULT.md).  The D3 gates compare verdicts and
+required coverage only; counts and counterexamples go to
+`protocolspec/results/*_evidence.txt`.
 
 ## Running
 
     ./check.sh     	# builds and installs the extensions, runs the D0–D2 gates
     ./check_d3.sh   	# D3 (S6); needs python3-psycopg2
     ./check_d3_s5.sh    # D3/S5 concurrent mark/restore
+    ./check_d3_v5.sh    # D3/V5 index-only scan vs concurrent VACUUM
 
 Prerequisites: POSTGRESQL.md.
 

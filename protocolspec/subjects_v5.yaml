@@ -2,11 +2,13 @@
 # and B, not spec.  id is the row's immutable logical id.  plan: the node
 # A2's query must be planned with (checked by EXPLAIN in A2's transaction).
 # id_column: position of id in the query's rows.
-# delete and insert return (ctid, id); {n} numbers inserts.  evidence: the
-# subject's result goes to the evidence file, not to the compared output.
+# delete and insert return (ctid, id); {n} numbers inserts.  opr, val: the
+# index qual for a fresh scan of the index (is the cleanup observed?).
 - name: btree (k) INCLUDE (id), index-only scan
   index: v_bt_k
   table: v_bt
+  opr: '>(int4,int4)'
+  val: '0'
   query: "SELECT k, id FROM v_bt WHERE k > 0 ORDER BY k"
   ordered: true
   id_column: 1
@@ -22,6 +24,8 @@
 - name: btree (k) INCLUDE (id), plain index scan (comparison)
   index: v_bt_k
   table: v_bt
+  opr: '>(int4,int4)'
+  val: '0'
   query: "SELECT k, id, pad FROM v_bt WHERE k > 0 ORDER BY k"
   ordered: true
   id_column: 1
@@ -34,19 +38,3 @@
   delete: "DELETE FROM v_bt WHERE id % 3 = 0 RETURNING ctid::text, id"
   insert: "INSERT INTO v_bt SELECT 100000 * {n} + g, 3 * g + 1, repeat('y', 100) FROM generate_series(1, 300) g RETURNING ctid::text, id"
   remove: "VACUUM (INDEX_CLEANUP ON) v_bt"
-- name: gist (p) INCLUDE (id), index-only scan
-  evidence: true
-  index: v_gt_p
-  table: v_gt
-  query: "SELECT p, id FROM v_gt WHERE p <@ box '((0,0),(49,40))'"
-  ordered: false
-  id_column: 1
-  plan: Index Only Scan using v_gt_p
-  settings: {enable_seqscan: 'off', enable_bitmapscan: 'off'}
-  reset:
-    - "TRUNCATE v_gt"
-    - "INSERT INTO v_gt SELECT i, point(i % 50, i / 50), repeat('x', 100) FROM generate_series(1, 2000) i"
-    - "VACUUM v_gt"
-  delete: "DELETE FROM v_gt WHERE id % 3 = 0 RETURNING ctid::text, id"
-  insert: "INSERT INTO v_gt SELECT 100000 * {n} + g, point(g % 50, g / 50), repeat('y', 100) FROM generate_series(1, 300) g RETURNING ctid::text, id"
-  remove: "VACUUM (INDEX_CLEANUP ON) v_gt"
