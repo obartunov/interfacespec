@@ -393,6 +393,9 @@ def parse_op(item):
     return actor, name, a.rstrip(')') or None, int(times or 1)
 
 
+RUN_COV = {}         # coverage over all subjects of a run (generation 'coverage_over_subjects')
+
+
 def run_subject(pspec, cspec, subj, fault, depth, profile='s6'):
     gen = cspec['generation'][profile]
     a = connect()
@@ -469,6 +472,8 @@ def run_subject(pspec, cspec, subj, fault, depth, profile='s6'):
     out.append(f"   depth {depth}: {stats['histories']} histories")
     EVIDENCE.append(f"{tag}: BOUNDARY (heap TID reused by an insert) {stats['boundary']}; "
                     f"DOMAIN (removed marked entry returned again) {stats['domain']}")
+    for k, v in cov.items():
+        RUN_COV[k] = RUN_COV.get(k, 0) + v
     if 'coverage' in gen:
         missing = [k for k in gen['coverage'] if not cov.get(k)]
         out.append(f"   coverage: {len(gen['coverage']) - len(missing)} of {len(gen['coverage'])} required classes present"
@@ -525,6 +530,10 @@ def run_history(proto, cap, a, b, subj, opr, val, prologue, body, stats, cov):
         b.settle()
         gone = deleted - b.present(subj['index'], opr, val, len(L) + len(chk.inserted))
         chk.set_removed(gone)
+        if gone:
+            seen.add('an entry of a deleted row observed gone from the index while A was open')
+        if deleted - gone:
+            seen.add('an entry of a deleted row still in the index after a remove started')
         if gone:
             stats['removed_observed'] += 1
             if b.running:
@@ -633,6 +642,7 @@ def run_history(proto, cap, a, b, subj, opr, val, prologue, body, stats, cov):
             new = {r[0] for r in rows if r[1]}
             chk.inserted |= new
             stats['inserted'] += len(new)
+            seen.add('B.insert ran while A was open')
             lines.append(f"       B.insert -> {len(new)} entries")
             if phase == 'marked' and new:
                 order = b.contents(subj['index'], opr, val, len(L) + len(chk.inserted))
@@ -648,6 +658,7 @@ def run_history(proto, cap, a, b, subj, opr, val, prologue, body, stats, cov):
                     seen.add('remove between mark and restore, deleted entry ' + rel)
             state, ev_ = b.start(subj['remove'])
             removal['began'] = True
+            seen.add('B.remove started while A was open')
             refresh_removed()
             stats[state] += 1
             lines.append(f"       B.remove -> {state}" + (f" ({ev_})" if ev_ else "")
@@ -660,7 +671,7 @@ def run_history(proto, cap, a, b, subj, opr, val, prologue, body, stats, cov):
     if boundary:
         stats['boundary'] += 1
         return None
-    if phase == 'restored':
+    if phase == 'restored' or not track:      # S5: only histories that ran restore
         bmr = any(k.startswith('B.') and k.endswith('between mark and restore') for k in seen)
         if bmr and 'outcome checked after restore' in seen:
             seen.add('B between mark and restore, then an outcome checked after restore')
@@ -749,7 +760,8 @@ def run_executor_subject(cspec, subj, fault, profile):
         EVIDENCE.append(f"{tag} minimal failing history:\n" + '\n'.join(worst[1]))
     if subj.get('known_violation'):
         out[1:] = [f"   known violation ({subj['known_violation']}): "
-                   + ("reproduced" if verdict == "FAIL" and stats['fail_cleaned']
+                   + ("NOT tested: no history with an observed cleanup" if not stats['cleaned']
+                      else "reproduced" if stats['fail_cleaned']
                       else "NOT reproduced; the expectation may be obsolete")]
     EVIDENCE.append(f"{tag}: {stats['histories']} histories, planned as {subj['plan']} {stats['planned']}, "
                     f"with an observed cleanup {stats['cleaned']}, failing {stats['fail']} "
@@ -885,6 +897,13 @@ def main():
             print('\n'.join(res))
             continue
         print('\n'.join(run_subject(pspec, cspec, subj, o.fault, o.depth or subj['depth'], o.profile)))
+    req = cspec['generation'][o.profile].get('coverage_over_subjects')
+    if req and o.subjects:
+        missing = [k for k in req if not RUN_COV.get(k)]
+        print(f"coverage over all subjects: {len(req) - len(missing)} of {len(req)} required classes present"
+              + (": FAILED coverage, missing " + '; '.join(missing) if missing else ''))
+        EVIDENCE.append(f"[{o.fault}] {cspec['generation'][o.profile]['contract']} coverage over all subjects (histories): "
+                        + '; '.join(f"{k}: {RUN_COV[k]}" for k in sorted(RUN_COV)))
     if o.evidence:
         with open(o.evidence, 'a') as fh:
             fh.write('\n'.join(EVIDENCE) + '\n')

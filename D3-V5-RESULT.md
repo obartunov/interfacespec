@@ -243,7 +243,9 @@ index-only, зелёный на plain index scan.
   40 → 32, V5 eligible 24 → 16.  Поэтому эти числа — evidence, а гейт
   проверяет инварианты.  Если чужой снимок держится весь прогон, eligible
   не будет, и V5-гейт покажет «none» вместо «yes»: история без очистки
-  ничего не проверяет.
+  ничего не проверяет.  Измерено с чужим снимком на весь прогон: оба
+  V5-вывода показывают «none», known violation — «NOT tested: no history
+  with an observed cleanup» (не «NOT reproduced»).
 
 ## Consequence
 

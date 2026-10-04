@@ -11,3 +11,4 @@ fault: none
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey
    depth 4: 176 histories
      result: pass
+coverage over all subjects: 4 of 4 required classes present

@@ -11,3 +11,4 @@ fault: skip_after_growth
 == gist point, p <@ box  caps: amcanreturn amgettuple amoptionalkey
    depth 4: 176 histories
      result: FAIL S6
+coverage over all subjects: 4 of 4 required classes present
