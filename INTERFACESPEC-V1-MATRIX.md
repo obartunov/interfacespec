@@ -7,7 +7,7 @@
 |---|---|---|---|---|---|---|---|---|
 | interface | + | · | · | · | · | · | semantic | да |
 | capability | + (флаги, callback'и) | · | + (`requires`) | · | + (n/a hash/GiST) | · | semantic | да |
-| claim (D1 guard `image_equivalence`) | — | + (O7) | — | — | — | — | semantic | да, слить с capability (n/a) |
+| claim (D1 guard `image_equivalence`) | — | + (O7) | — | — | — | — | semantic | да, отдельно от capability: тот же вердикт n/a, другая семантика |
 | role | — | + | — | — | — | — | semantic | да |
 | binding | — | + (am / opfamily) | вырожден (имя поля) | — | — | — | semantic | да |
 | invocation (D1 «protocol») | — | + | — | — | — | — | semantic | да, переименовать |
@@ -23,8 +23,8 @@
 | lifetime | — | — | + (S7, R8) | — | — | — | semantic | да, атрибут observable |
 | observation boundary | неявно (SQL) | неявно (функция) | неявно (callback) | неявно | неявно | + (исполнитель) | semantic | да, атрибут observable / actor |
 | actor | — | — | два скана одной сессии (S7) | + (B) | · | + (A2) | semantic | да |
-| reference (нормативный) | + | + (роль-эталон, «не знаю») | + | + (множество при начале A) | · | + (видимое снимку) | semantic | да |
-| oracle | + (seqscan) | — (эталон — роль) | + (forward pass) | + (свежий скан индекса) | · | + (seqscan под снимком A2) | harness | да, отдельно от reference |
+| reference (нормативный) | + | + (роль-эталон, «не знаю») | + | + (множество при начале A) | · | + (видимое снимку) | semantic | да, как операнд/параметр law, не top-level |
+| oracle | + (seqscan) | — (эталон — роль) | + (forward pass) | + (свежий скан индекса) | · | + (seqscan под снимком A2) | harness | да: исполняемая реализация reference (различение доказано V5 P1) |
 | value source | + (колонка) | + (sample, cast, generated, completions) | — | — | — | — | harness; completions — квантор закона | да, в harness |
 | generation profile | — | — | + | + | + (`order`) | + (`epilogue`) | harness | да |
 | identity | — | — | — (TID) | BOUNDARY по TID | · | логический `id` в данных | harness / атрибут observable | нет как сущность |
